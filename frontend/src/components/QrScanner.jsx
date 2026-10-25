@@ -15,14 +15,13 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
   // Initialize and discover available video cameras
   useEffect(() => {
     isMountedRef.current = true;
-    const scannerElementId = 'reader-viewport';
 
     Html5Qrcode.getCameras()
       .then((devices) => {
         if (!isMountedRef.current) return;
         if (devices && devices.length > 0) {
           setCameras(devices);
-          // Prefer back camera if found
+          // Prefer back camera if found for mobile venue scanning
           const backCam = devices.find(
             (d) => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment')
           );
@@ -36,7 +35,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         console.warn('Camera access error or permission denied:', err);
         setPermissionDenied(true);
         setErrorMessage(
-          'Camera access was denied or is unavailable. Please check your browser permissions or use manual lookup.'
+          'Camera access was denied or is unavailable. Please check your browser permissions or switch to manual lookup.'
         );
       });
 
@@ -57,13 +56,13 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
   const startScanner = async (cameraId) => {
     try {
       setErrorMessage(null);
-      await stopScanner(); // Stop any running instance first
+      await stopScanner();
 
       const html5QrCode = new Html5Qrcode('reader-viewport');
       html5QrCodeRef.current = html5QrCode;
 
       const config = {
-        fps: 10,
+        fps: 12,
         qrbox: { width: 250, height: 250 },
         aspectRatio: 1.0,
       };
@@ -78,7 +77,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
           }
         },
         (scanError) => {
-          // Ignore frequent frame-level parse errors while scanning
+          // Frequent frame-level parse noise while scanning is normal
         }
       );
 
@@ -92,7 +91,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         setScannerActive(false);
         setPermissionDenied(true);
         setErrorMessage(
-          'Failed to initialize camera video stream. Permissions might be denied or camera is in use by another app.'
+          'Failed to initialize camera video stream. Permissions may be denied or the camera is in use by another application.'
         );
       }
     }
@@ -114,11 +113,11 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
   };
 
   return (
-    <div className="card" style={{ maxWidth: '520px', margin: '0 auto', textAlign: 'center' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <h3 style={{ fontSize: '1.125rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+    <div className="card" style={{ maxWidth: '520px', margin: '0 auto', textAlign: 'center', background: '#191921', borderColor: 'var(--border-subtle)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem' }}>
+        <h3 style={{ fontSize: '1.15rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <Camera size={20} style={{ color: 'var(--accent-primary)' }} />
-          Live Camera Scanner
+          <span>Live Optical Scanner</span>
         </h3>
 
         {cameras.length > 1 && (
@@ -126,7 +125,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
             value={selectedCameraId}
             onChange={(e) => setSelectedCameraId(e.target.value)}
             className="form-select"
-            style={{ width: 'auto', padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
+            style={{ width: 'auto', padding: '0.35rem 0.75rem', fontSize: '0.8rem', background: '#14141b' }}
           >
             {cameras.map((c) => (
               <option key={c.id} value={c.id}>
@@ -137,50 +136,51 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         )}
       </div>
 
-      {/* Camera Viewport Container */}
+      {/* Camera Viewport Container with Viewfinder styling */}
       <div
         style={{
           position: 'relative',
           borderRadius: 'var(--radius-lg)',
           overflow: 'hidden',
-          background: '#030712',
-          border: '2px solid rgba(99, 102, 241, 0.3)',
-          minHeight: '280px',
+          background: '#0a0a0d',
+          border: '2px solid rgba(255, 61, 141, 0.4)',
+          minHeight: '290px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.5)',
         }}
       >
-        <div id="reader-viewport" style={{ width: '100%', minHeight: '280px' }} />
+        <div id="reader-viewport" style={{ width: '100%', minHeight: '290px' }} />
 
         {!scannerActive && !errorMessage && (
-          <div style={{ position: 'absolute', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-            <CameraOff size={36} />
-            <span style={{ fontSize: '0.875rem' }}>Initializing optical camera...</span>
+          <div style={{ position: 'absolute', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.65rem' }}>
+            <CameraOff size={38} style={{ color: 'var(--accent-secondary)' }} />
+            <span style={{ fontSize: '0.875rem' }}>Activating optical camera stream...</span>
           </div>
         )}
       </div>
 
-      {/* Permission Denied or Camera Error banner with prominent Manual Lookup fallback */}
+      {/* Permission Denied or Camera Error banner */}
       {errorMessage && (
         <div
           style={{
-            marginTop: '1rem',
+            marginTop: '1.25rem',
             padding: '1rem',
             borderRadius: 'var(--radius-md)',
             background: 'rgba(239, 68, 68, 0.12)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
             textAlign: 'left',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontWeight: 600, fontSize: '0.875rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontWeight: 700, fontSize: '0.875rem' }}>
             <AlertCircle size={18} />
-            <span>Camera Unavailable</span>
+            <span>Camera Access Notice</span>
           </div>
-          <p style={{ fontSize: '0.8125rem', color: '#fecaca', marginTop: '0.25rem' }}>
+          <p style={{ fontSize: '0.825rem', color: '#fecaca', marginTop: '0.35rem', lineHeight: 1.45 }}>
             {errorMessage}
           </p>
-          <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
+          <div style={{ marginTop: '0.85rem', display: 'flex', gap: '0.65rem' }}>
             {onSwitchToManual && (
               <button
                 onClick={onSwitchToManual}
@@ -188,7 +188,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
                 style={{ flex: 1 }}
               >
                 <Search size={14} />
-                Switch to Manual Lookup
+                <span>Switch to Manual Lookup</span>
               </button>
             )}
             <button
@@ -196,25 +196,25 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
               className="btn btn-sm btn-secondary"
             >
               <RefreshCw size={14} />
-              Retry Camera
+              <span>Retry</span>
             </button>
           </div>
         </div>
       )}
 
       {/* Instructions & Manual Fallback Button */}
-      <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-          Position the attendee’s digital QR ticket within the camera viewfinder. The ticket ID will be validated automatically.
+      <div style={{ marginTop: '1.35rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+        <p style={{ fontSize: '0.825rem', color: 'var(--text-secondary)' }}>
+          Position the attendee’s digital QR ticket within the frame. The opaque ticket ID is validated in real time.
         </p>
         {onSwitchToManual && (
           <button
             onClick={onSwitchToManual}
             className="btn btn-outline btn-sm"
-            style={{ alignSelf: 'center' }}
+            style={{ alignSelf: 'center', borderColor: 'rgba(255, 138, 61, 0.4)', color: '#ff9a54' }}
           >
             <Search size={14} />
-            Having trouble? Use Manual Lookup
+            <span>Search Attendee / Enter Ticket ID Manually</span>
           </button>
         )}
       </div>

@@ -1,10 +1,13 @@
 /**
  * React Context for Authentication and Role Management.
+ * Restricts demo auto-login and client-side role switching to explicit mock mode.
+ * In real API mode, authentication and authorization are strictly backend-driven.
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { getToken, getUser, setToken, setUser, clearAuth } from './authHelpers';
 import * as authService from '../services/authService';
+import { isMockMode } from '../services/apiClient';
 
 const AuthContext = createContext(null);
 
@@ -17,22 +20,23 @@ export function AuthProvider({ children }) {
     // Rehydrate auth state on mount
     const savedToken = getToken();
     const savedUser = getUser();
+
+    // When real API is configured, clear any residual mock tokens from past local tests
+    if (!isMockMode && savedToken?.startsWith('mock-jwt')) {
+      clearAuth();
+      setCurrentToken(null);
+      setCurrentUser(null);
+      setLoading(false);
+      return;
+    }
+
     if (savedToken && savedUser) {
       setCurrentToken(savedToken);
       setCurrentUser(savedUser);
     } else {
-      // Default demo attendee user so fresh visits have an immediate active profile
-      const demoUser = {
-        userId: 'usr-attendee-demo',
-        name: 'Chandrabhanu Prusty',
-        email: 'chandrabhanu@example.com',
-        role: 'ATTENDEE',
-      };
-      const demoToken = 'mock-jwt-default';
-      setCurrentUser(demoUser);
-      setCurrentToken(demoToken);
-      setUser(demoUser);
-      setToken(demoToken);
+      // User must sign in first; fresh visits start unauthenticated
+      setCurrentToken(null);
+      setCurrentUser(null);
     }
     setLoading(false);
   }, []);
@@ -65,8 +69,14 @@ export function AuthProvider({ children }) {
     setCurrentUser(null);
   };
 
-  // Switch role for quick testing/grading across Attendee, Organizer, Coordinator
+  // Switch role for quick testing/grading across Attendee, Organizer, Coordinator in mock mode ONLY
   const switchRole = (newRole) => {
+    if (!isMockMode) {
+      console.warn(
+        '[Marque Auth] Client-side role switching is restricted to mock mode. In real API mode, user roles are determined by backend authentication.'
+      );
+      return;
+    }
     if (!user) return;
     const updatedUser = { ...user, role: newRole };
     setUser(updatedUser);
@@ -80,6 +90,7 @@ export function AuthProvider({ children }) {
     role: user?.role || 'ATTENDEE',
     isOrganizer: user?.role === 'ORGANIZER',
     isCoordinator: user?.role === 'COORDINATOR' || user?.role === 'ORGANIZER', // Organizers can also check in
+    isMockMode,
     loading,
     login,
     register,

@@ -1,24 +1,52 @@
 /**
  * Base HTTP API client for Marque frontend.
  * Reads base URL dynamically from VITE_API_BASE_URL.
- * Seamlessly delegates to mockBackend when VITE_API_BASE_URL is not set.
+ * Uses mock adapter ONLY when mock mode is explicitly enabled (VITE_USE_MOCK_API=true).
+ * When VITE_API_BASE_URL is configured, performs real HTTP requests and never falls back to mock data.
  * Conforms to API_CONTRACT.md standard error format: { error: { code, message } }
  */
 
-import { getAuthHeaders, getUser } from '../auth/authHelpers';
-import { mockBackend } from './mockData';
+import { getAuthHeaders, getUser } from '../auth/authHelpers.js';
+import { mockBackend } from './mockData.js';
 
-const BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+export function getApiConfig() {
+  const env =
+    typeof import.meta !== 'undefined' && import.meta.env
+      ? import.meta.env
+      : typeof process !== 'undefined' && process.env
+      ? process.env
+      : {};
+
+  const baseUrl = (env.VITE_API_BASE_URL || '').replace(/\/+$/, '');
+  const isExplicitMock = String(env.VITE_USE_MOCK_API || '').toLowerCase() === 'true';
+  // Mock mode is active only when no base URL is set AND mock mode is explicitly enabled
+  const mockMode = !baseUrl && isExplicitMock;
+
+  return { baseUrl, isMockMode: mockMode };
+}
+
+export const isMockMode = getApiConfig().isMockMode;
+export const BASE_URL = getApiConfig().baseUrl;
 
 export async function apiRequest(endpoint, options = {}) {
-  const isMockMode = !BASE_URL;
+  const { baseUrl, isMockMode: activeMockMode } = getApiConfig();
 
-  // If no external API configured, run with mock adapter
-  if (isMockMode) {
+  // If mock mode is explicitly enabled, route to mock adapter
+  if (activeMockMode) {
     return handleMockRequest(endpoint, options);
   }
 
-  const url = `${BASE_URL}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+  // If real API base URL is missing and mock mode is not enabled, throw clear error
+  if (!baseUrl) {
+    const error = new Error(
+      'API base URL is not configured. Set VITE_API_BASE_URL in your environment, or set VITE_USE_MOCK_API=true for local mock mode.'
+    );
+    error.code = 'CONFIG_ERROR';
+    error.status = 500;
+    throw error;
+  }
+
+  const url = `${baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
   const headers = {
     ...getAuthHeaders(),
     ...(options.headers || {}),
@@ -45,12 +73,18 @@ export async function apiRequest(endpoint, options = {}) {
 
     return data;
   } catch (err) {
-    // If backend is configured but network fails, log clear diagnostic
+    // If backend responded with an HTTP status error, rethrow it directly
     if (err.status) {
       throw err;
     }
-    console.warn(`[Marque API] Connection failed to ${url}, falling back to mock adapter for demonstration.`, err);
-    return handleMockRequest(endpoint, options);
+
+    // Network / connectivity error: NEVER silently fall back to mock data
+    const message = `Unable to reach the Marque backend at ${baseUrl}. Please check your network connection, API Gateway deployment, and CORS settings.`;
+    const netErr = new Error(message);
+    netErr.code = 'NETWORK_ERROR';
+    netErr.status = 0;
+    netErr.originalError = err;
+    throw netErr;
   }
 }
 

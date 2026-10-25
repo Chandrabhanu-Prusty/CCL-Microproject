@@ -31,7 +31,7 @@ export default function TicketPage() {
       setTicket(res.ticket);
     } catch (err) {
       console.error('Failed to load ticket:', err);
-      setError(err.message || 'Unable to retrieve ticket details. The ticket ID may be invalid.');
+      setError(err.message || 'Unable to retrieve ticket details. The ticket reference may be invalid or expired.');
     } finally {
       setLoading(false);
     }
@@ -72,19 +72,20 @@ export default function TicketPage() {
     : 'TBA';
 
   return (
-    <div style={{ maxWidth: '480px', margin: '1rem auto 3rem' }}>
+    <div style={{ maxWidth: '500px', margin: '1rem auto 3.5rem' }}>
       <Link to="/my-registrations" className="btn btn-sm btn-secondary" style={{ marginBottom: '1.5rem', display: 'inline-flex' }}>
         <ArrowLeft size={16} /> Back to My Registrations
       </Link>
 
-      <div className="ticket-card">
+      <div className="ticket-card" style={{ boxShadow: 'var(--shadow-lg), var(--accent-subtle-glow)' }}>
         {/* Ticket Header */}
-        <div className="ticket-header">
+        <div className="ticket-header" style={{ background: 'rgba(255, 61, 141, 0.1)', borderBottom: '1px solid var(--border-subtle)' }}>
           <div>
-            <span style={{ fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: '#a5b4fc', fontWeight: 700 }}>
-              Official Campus Pass
-            </span>
-            <h2 style={{ fontSize: '1.25rem', marginTop: '0.2rem', color: '#fff' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--accent-secondary)', fontWeight: 800 }}>
+              <Sparkles size={13} />
+              <span>Official Campus Pass</span>
+            </div>
+            <h2 style={{ fontSize: '1.35rem', marginTop: '0.25rem', color: '#ffffff' }}>
               {ticket.eventTitle || 'Campus Event'}
             </h2>
           </div>
@@ -94,45 +95,58 @@ export default function TicketPage() {
         {/* Ticket Body */}
         <div className="ticket-body">
           {/* QR Code contains strictly ONLY the opaque ticket ID */}
-          <div className="qr-wrapper">
+          <div className="qr-wrapper" style={{ padding: '1.15rem' }}>
             <QRCodeSVG
               value={ticket.ticketId}
-              size={200}
+              size={210}
               level="H"
               includeMargin={false}
             />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.25rem' }}>
-            <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Opaque Ticket ID
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.3rem' }}>
+            <span style={{ fontSize: '0.725rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', fontWeight: 600 }}>
+              Opaque Ticket Reference
             </span>
             <span className="ticket-code-display">
               {ticket.ticketId}
             </span>
           </div>
 
-          <div style={{ width: '100%', textAlign: 'left', background: 'rgba(15, 23, 42, 0.6)', padding: '1.25rem', borderRadius: 'var(--radius-md)', display: 'flex', flexDirection: 'column', gap: '0.75rem', fontSize: '0.875rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
-              <Calendar size={16} style={{ color: '#818cf8', flexShrink: 0 }} />
+          <div
+            style={{
+              width: '100%',
+              textAlign: 'left',
+              background: '#14141b',
+              padding: '1.25rem',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-subtle)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.75rem',
+              fontSize: '0.875rem',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)' }}>
+              <Calendar size={16} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
               <span>{formattedDate}</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
-              <MapPin size={16} style={{ color: '#ec4899', flexShrink: 0 }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)' }}>
+              <MapPin size={16} style={{ color: 'var(--accent-secondary)', flexShrink: 0 }} />
               <span>{ticket.eventVenue || 'Campus Venue'}</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)' }}>
               <User size={16} style={{ color: '#34d399', flexShrink: 0 }} />
               <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{ticket.attendeeName || 'Attendee'}</span>
             </div>
             {ticket.attendeeEmail && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-secondary)' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: 'var(--text-secondary)' }}>
                 <Mail size={16} style={{ color: '#60a5fa', flexShrink: 0 }} />
                 <span>{ticket.attendeeEmail}</span>
               </div>
             )}
             {ticket.checkedInAt && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#60a5fa', fontSize: '0.8125rem', borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: '0.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', color: '#60a5fa', fontSize: '0.8125rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '0.5rem' }}>
                 <Clock size={15} />
                 <span>Checked In: {new Date(ticket.checkedInAt).toLocaleString()}</span>
               </div>
@@ -140,13 +154,13 @@ export default function TicketPage() {
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-            <ShieldCheck size={14} style={{ color: '#10b981' }} />
-            Verified Single-Use Entry. Present this code at venue entrance.
+            <ShieldCheck size={14} style={{ color: 'var(--accent-primary)' }} />
+            Single-use verified pass. Scan at entrance to validate admission.
           </div>
 
-          <button onClick={() => window.print()} className="btn btn-secondary" style={{ width: '100%' }}>
+          <button onClick={() => window.print()} className="btn btn-secondary" style={{ width: '100%', height: '42px' }}>
             <Printer size={16} />
-            Print / Save Ticket
+            <span>Print / Save Physical Copy</span>
           </button>
         </div>
       </div>

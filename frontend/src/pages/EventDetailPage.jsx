@@ -10,7 +10,9 @@ import {
   AlertCircle, 
   ArrowLeft, 
   ShieldCheck, 
-  X 
+  X,
+  Sparkles,
+  Info
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import * as eventService from '../services/eventService';
@@ -30,7 +32,7 @@ export default function EventDetailPage() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [feedback, setFeedback] = useState(null); // { type: 'success' | 'warning' | 'error', message: '' }
+  const [feedback, setFeedback] = useState(null);
   const [userRsvp, setUserRsvp] = useState(null);
   const [activeTicket, setActiveTicket] = useState(null);
   const [showTicketModal, setShowTicketModal] = useState(false);
@@ -56,15 +58,15 @@ export default function EventDetailPage() {
             eventTitle: eventRes.event.title,
             eventVenue: eventRes.event.venue,
             eventStartAt: eventRes.event.startAt,
-            attendeeName: user.name,
-            attendeeEmail: user.email,
+            attendeeName: user?.name || 'Campus Attendee',
+            attendeeEmail: user?.email || '',
             status: 'ACTIVE',
           });
         }
       }
     } catch (err) {
       console.error('Failed to load event details:', err);
-      setError(err.message || 'Unable to retrieve event details.');
+      setError(err.message || 'Unable to retrieve event details from backend.');
     } finally {
       setLoading(false);
     }
@@ -83,14 +85,12 @@ export default function EventDetailPage() {
     try {
       setActionLoading(true);
       setFeedback(null);
-      // Actual API call to backend
       const result = await rsvpService.rsvpEvent(eventId);
 
-      // Display actual backend status
       if (result.status === 'CONFIRMED') {
         setFeedback({
           type: 'success',
-          message: 'RSVP Confirmed! Your official QR ticket is ready below.',
+          message: 'RSVP Confirmed! Your official digital QR ticket has been issued below.',
         });
         if (result.ticketId) {
           const ticketData = {
@@ -109,10 +109,9 @@ export default function EventDetailPage() {
       } else if (result.status === 'WAITLISTED') {
         setFeedback({
           type: 'warning',
-          message: `Event reached full capacity. You are at Queue Position #${result.queuePosition} in the waitlist. If a spot opens, you will be auto-promoted!`,
+          message: `Event is at full capacity. You are in queue at position #${result.queuePosition}. If an RSVP cancels, you will be auto-promoted!`,
         });
       }
-      // Refresh event status and capacity
       await loadEventAndRsvp();
     } catch (err) {
       console.error('RSVP submission failed:', err);
@@ -126,7 +125,7 @@ export default function EventDetailPage() {
   };
 
   const handleCancelRsvp = async () => {
-    if (!window.confirm('Are you sure you want to cancel your registration? This action will release your ticket.')) {
+    if (!window.confirm('Are you sure you want to cancel this registration? Your reserved ticket will be released.')) {
       return;
     }
 
@@ -158,11 +157,11 @@ export default function EventDetailPage() {
 
   if (error || !event) {
     return (
-      <div>
-        <Link to="/events" className="btn btn-sm btn-secondary" style={{ marginBottom: '1.5rem' }}>
+      <div style={{ maxWidth: '640px', margin: '2rem auto' }}>
+        <Link to="/events" className="btn btn-sm btn-secondary" style={{ marginBottom: '1.5rem', display: 'inline-flex' }}>
           <ArrowLeft size={16} /> Back to Events
         </Link>
-        <ErrorMessage title="Event not found" message={error || 'The requested event could not be found.'} onRetry={loadEventAndRsvp} />
+        <ErrorMessage title="Event Not Available" message={error || 'The requested event could not be found.'} onRetry={loadEventAndRsvp} />
       </div>
     );
   }
@@ -179,88 +178,149 @@ export default function EventDetailPage() {
       })
     : 'TBA';
 
+  const defaultBanner =
+    'https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=1200&q=80';
+
   return (
-    <div style={{ maxWidth: '1000px', margin: '0 auto' }}>
+    <div style={{ maxWidth: '1040px', margin: '0 auto' }}>
       {/* Back button */}
       <Link to="/events" className="btn btn-sm btn-secondary" style={{ marginBottom: '1.5rem', display: 'inline-flex' }}>
         <ArrowLeft size={16} /> Back to Events
       </Link>
 
-      {/* Banner */}
-      <div style={{ position: 'relative', height: '360px', borderRadius: 'var(--radius-xl)', overflow: 'hidden', marginBottom: '2rem', boxShadow: 'var(--shadow-card)' }}>
+      {/* Banner Card */}
+      <div
+        style={{
+          position: 'relative',
+          height: '380px',
+          borderRadius: 'var(--radius-xl)',
+          overflow: 'hidden',
+          marginBottom: '2rem',
+          boxShadow: 'var(--shadow-card)',
+          border: '1px solid var(--border-subtle)',
+          background: '#121218',
+        }}
+      >
         <img
-          src={event.bannerUrl || 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=1200&q=80'}
+          src={event.bannerUrl || defaultBanner}
           alt={event.title}
           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={(e) => {
+            e.currentTarget.src = defaultBanner;
+          }}
         />
-        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(180deg, transparent 40%, rgba(11, 15, 25, 0.95) 100%)' }} />
-        <div style={{ position: 'absolute', bottom: '1.5rem', left: '1.5rem', right: '1.5rem' }}>
-          <span className="category-pill" style={{ background: 'rgba(99, 102, 241, 0.25)', borderColor: 'rgba(99, 102, 241, 0.4)', color: '#fff', marginBottom: '0.75rem', display: 'inline-block' }}>
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            background: 'linear-gradient(180deg, rgba(10, 10, 13, 0.2) 20%, rgba(10, 10, 13, 0.95) 100%)',
+          }}
+        />
+        <div style={{ position: 'absolute', bottom: '1.75rem', left: '1.75rem', right: '1.75rem' }}>
+          <span
+            className="category-pill"
+            style={{
+              background: 'rgba(255, 61, 141, 0.2)',
+              borderColor: 'rgba(255, 61, 141, 0.45)',
+              color: '#ffffff',
+              fontWeight: 700,
+              marginBottom: '0.85rem',
+              display: 'inline-block',
+            }}
+          >
             {event.category || 'General'}
           </span>
-          <h1 style={{ fontSize: 'clamp(1.75rem, 4vw, 2.5rem)', color: '#fff', textShadow: '0 2px 8px rgba(0,0,0,0.6)' }}>
+          <h1 style={{ fontSize: 'clamp(1.85rem, 4.5vw, 2.75rem)', color: '#ffffff', lineHeight: 1.2 }}>
             {event.title}
           </h1>
         </div>
       </div>
 
-      {/* Status Alert Banner if any */}
+      {/* Status Feedback Banner */}
       {feedback && (
         <div
           style={{
-            marginBottom: '1.5rem',
+            marginBottom: '1.75rem',
             padding: '1rem 1.25rem',
             borderRadius: 'var(--radius-md)',
-            background: feedback.type === 'success' ? 'rgba(16, 185, 129, 0.15)' : feedback.type === 'warning' ? 'rgba(245, 158, 11, 0.15)' : 'rgba(239, 68, 68, 0.15)',
-            border: `1px solid ${feedback.type === 'success' ? 'rgba(16, 185, 129, 0.4)' : feedback.type === 'warning' ? 'rgba(245, 158, 11, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
-            color: feedback.type === 'success' ? '#34d399' : feedback.type === 'warning' ? '#fbbf24' : '#f87171',
+            background:
+              feedback.type === 'success'
+                ? 'rgba(16, 185, 129, 0.12)'
+                : feedback.type === 'warning'
+                ? 'rgba(255, 138, 61, 0.12)'
+                : 'rgba(239, 68, 68, 0.12)',
+            border: `1px solid ${
+              feedback.type === 'success'
+                ? 'rgba(16, 185, 129, 0.35)'
+                : feedback.type === 'warning'
+                ? 'rgba(255, 138, 61, 0.35)'
+                : 'rgba(239, 68, 68, 0.35)'
+            }`,
+            color:
+              feedback.type === 'success'
+                ? '#34d399'
+                : feedback.type === 'warning'
+                ? '#ff9a54'
+                : '#f87171',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: '0.75rem',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9375rem', fontWeight: 500 }}>
-            {feedback.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', fontSize: '0.925rem', fontWeight: 600 }}>
+            {feedback.type === 'success' ? (
+              <CheckCircle size={18} />
+            ) : feedback.type === 'warning' ? (
+              <Clock size={18} />
+            ) : (
+              <AlertCircle size={18} />
+            )}
             <span>{feedback.message}</span>
           </div>
-          <button onClick={() => setFeedback(null)} style={{ color: 'inherit' }}>
+          <button onClick={() => setFeedback(null)} aria-label="Dismiss feedback" style={{ color: 'inherit' }}>
             <X size={16} />
           </button>
         </div>
       )}
 
-      {/* Grid: Details on Left, RSVP Action Card on Right */}
+      {/* Grid: Event Details & Action Card */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '2rem', alignItems: 'start' }}>
-        {/* Left: Event Description & Meta */}
-        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        {/* Left Column: Details */}
+        <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
           <div>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-              Event Information
+            <h2 style={{ fontSize: '1.25rem', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.65rem' }}>
+              Schedule & Venue
             </h2>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                <Calendar size={20} style={{ color: 'var(--accent-primary)', flexShrink: 0, marginTop: '2px' }} />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: 'var(--radius-sm)', background: 'rgba(255, 61, 141, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-primary)', flexShrink: 0 }}>
+                  <Calendar size={18} />
+                </div>
                 <div>
-                  <div style={{ fontWeight: 600 }}>Date & Time</div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem' }}>{formattedDate}</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Date & Time</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{formattedDate}</div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                <MapPin size={20} style={{ color: 'var(--accent-secondary)', flexShrink: 0, marginTop: '2px' }} />
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: 'var(--radius-sm)', background: 'rgba(255, 138, 61, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-secondary)', flexShrink: 0 }}>
+                  <MapPin size={18} />
+                </div>
                 <div>
-                  <div style={{ fontWeight: 600 }}>Venue Location</div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem' }}>{event.venue || 'Campus Venue'}</div>
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Campus Venue</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>{event.venue || 'Campus Venue'}</div>
                 </div>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem' }}>
-                <Users size={20} style={{ color: '#10b981', flexShrink: 0, marginTop: '2px' }} />
+              <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.85rem' }}>
+                <div style={{ width: '36px', height: '36px', borderRadius: 'var(--radius-sm)', background: 'rgba(16, 185, 129, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#34d399', flexShrink: 0 }}>
+                  <Users size={18} />
+                </div>
                 <div>
-                  <div style={{ fontWeight: 600 }}>Event Capacity</div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9375rem' }}>
-                    {event.capacity} total seats ({event.confirmedCount} confirmed)
+                  <div style={{ fontWeight: 700, fontSize: '0.9rem' }}>Capacity Allocation</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
+                    {event.capacity} total seats ({event.confirmedCount} confirmed bookings)
                   </div>
                 </div>
               </div>
@@ -268,25 +328,25 @@ export default function EventDetailPage() {
           </div>
 
           <div>
-            <h2 style={{ fontSize: '1.25rem', marginBottom: '0.75rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.5rem' }}>
-              About This Event
+            <h2 style={{ fontSize: '1.25rem', marginBottom: '0.85rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.65rem' }}>
+              About the Event
             </h2>
-            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.7, fontSize: '0.9375rem', whiteSpace: 'pre-line' }}>
+            <p style={{ color: 'var(--text-secondary)', lineHeight: 1.75, fontSize: '0.95rem', whiteSpace: 'pre-line' }}>
               {event.description}
             </p>
           </div>
         </div>
 
-        {/* Right: RSVP & Ticket Registration Card */}
-        <div className="card" style={{ position: 'sticky', top: '5.5rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+        {/* Right Column: RSVP & Pass Action Card */}
+        <div className="card" style={{ position: 'sticky', top: '5.5rem', display: 'flex', flexDirection: 'column', gap: '1.35rem' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: '0.8125rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
-              Registration Status
+            <span style={{ fontSize: '0.775rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>
+              Pass Status
             </span>
             {userRsvp ? (
               <StatusBadge status={userRsvp.status} />
             ) : isFull ? (
-              <span className="status-badge badge-waitlisted">Waitlist Only</span>
+              <span className="status-badge badge-waitlisted">Waitlist Active</span>
             ) : (
               <span className="status-badge badge-confirmed">Free RSVP Open</span>
             )}
@@ -296,26 +356,43 @@ export default function EventDetailPage() {
 
           {/* User Registration States */}
           {userRsvp ? (
-            <div style={{ background: 'rgba(15, 23, 42, 0.7)', borderRadius: 'var(--radius-md)', padding: '1.25rem', border: '1px solid var(--border-subtle)', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <div
+              style={{
+                background: '#14141b',
+                borderRadius: 'var(--radius-md)',
+                padding: '1.35rem',
+                border: '1px solid var(--border-subtle)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '1rem',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                 {userRsvp.status === 'CONFIRMED' ? (
-                  <CheckCircle size={18} style={{ color: '#34d399' }} />
+                  <CheckCircle size={20} style={{ color: '#34d399', flexShrink: 0 }} />
                 ) : (
-                  <Clock size={18} style={{ color: '#fbbf24' }} />
+                  <Clock size={20} style={{ color: '#ff9a54', flexShrink: 0 }} />
                 )}
-                <span style={{ fontWeight: 600, fontSize: '0.9375rem' }}>
-                  {userRsvp.status === 'CONFIRMED' ? 'You are registered!' : `In Waitlist (Position #${userRsvp.queuePosition || 1})`}
-                </span>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>
+                    {userRsvp.status === 'CONFIRMED' ? 'Confirmed Pass Active' : `In Waitlist (Position #${userRsvp.queuePosition || 1})`}
+                  </div>
+                  <div style={{ fontSize: '0.775rem', color: 'var(--text-muted)' }}>
+                    {userRsvp.status === 'CONFIRMED'
+                      ? 'Present digital QR ticket at venue entrance'
+                      : 'You will be notified and promoted if a spot frees up'}
+                  </div>
+                </div>
               </div>
 
               {userRsvp.status === 'CONFIRMED' && activeTicket && (
                 <button
                   onClick={() => setShowTicketModal(true)}
                   className="btn btn-primary"
-                  style={{ width: '100%' }}
+                  style={{ width: '100%', height: '44px' }}
                 >
                   <Ticket size={16} />
-                  View Digital QR Ticket
+                  <span>View Digital QR Ticket</span>
                 </button>
               )}
 
@@ -330,11 +407,21 @@ export default function EventDetailPage() {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {!isAuthenticated && (
+                <div style={{ fontSize: '0.825rem', color: 'var(--text-secondary)', background: 'rgba(255, 61, 141, 0.08)', border: '1px solid rgba(255, 61, 141, 0.2)', padding: '0.75rem', borderRadius: 'var(--radius-sm)' }}>
+                  Sign in or register to claim your free pass for this event.
+                </div>
+              )}
+
               <button
                 onClick={handleRsvp}
                 disabled={actionLoading}
                 className={`btn btn-lg ${isFull ? 'btn-secondary' : 'btn-primary'}`}
-                style={{ width: '100%' }}
+                style={{
+                  width: '100%',
+                  borderColor: isFull ? 'rgba(255, 138, 61, 0.4)' : undefined,
+                  color: isFull ? '#ff9a54' : '#ffffff',
+                }}
               >
                 {actionLoading ? (
                   <span>Processing...</span>
@@ -346,14 +433,14 @@ export default function EventDetailPage() {
                 ) : (
                   <>
                     <Ticket size={18} />
-                    <span>RSVP for Free</span>
+                    <span>Claim Free RSVP Pass</span>
                   </>
                 )}
               </button>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                <ShieldCheck size={14} style={{ color: 'var(--accent-primary)' }} />
-                Capacity-protected instant booking. Single-use QR issued upon confirmation.
+                <ShieldCheck size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+                <span>Single-use opaque QR code issued automatically on confirmation.</span>
               </div>
             </div>
           )}

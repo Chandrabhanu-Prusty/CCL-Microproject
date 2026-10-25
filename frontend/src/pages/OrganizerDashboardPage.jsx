@@ -11,7 +11,9 @@ import {
   MapPin, 
   ShieldAlert, 
   Sparkles, 
-  ArrowRight 
+  ArrowRight,
+  TrendingUp,
+  Ticket
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import * as eventService from '../services/eventService';
@@ -22,7 +24,7 @@ import StatusBadge from '../components/StatusBadge';
 import CapacityBar from '../components/CapacityBar';
 
 export default function OrganizerDashboardPage() {
-  const { user, isOrganizer, switchRole } = useAuth();
+  const { user, isOrganizer, switchRole, isMockMode } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -56,11 +58,10 @@ export default function OrganizerDashboardPage() {
       setLoading(true);
       setError(null);
       const res = await eventService.getEvents();
-      // Show all events or events managed by this organizer
       setEvents(res.events || []);
     } catch (err) {
       console.error('Failed to load organizer events:', err);
-      setError(err.message || 'Unable to retrieve events.');
+      setError(err.message || 'Unable to retrieve events from backend.');
     } finally {
       setLoading(false);
     }
@@ -116,10 +117,8 @@ export default function OrganizerDashboardPage() {
       };
 
       if (editingEvent) {
-        // PATCH /api/events/{eventId}
         await eventService.updateEvent(editingEvent.eventId, payload);
       } else {
-        // POST /api/events
         await eventService.createEvent(payload);
       }
 
@@ -162,43 +161,64 @@ export default function OrganizerDashboardPage() {
   return (
     <div>
       {/* Header */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1.25rem', marginBottom: '2rem' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Organizer Dashboard</h1>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Publish campus events, manage capacities, monitor registrations, and track venue attendance.
+          <h1 style={{ fontSize: '2.15rem', marginBottom: '0.35rem' }}>Organizer Dashboard</h1>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
+            Publish campus events, manage capacities, monitor registrations, and inspect live venue attendance.
           </p>
         </div>
 
         <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {!isOrganizer && (
+          {isMockMode && !isOrganizer && (
             <button
               onClick={() => switchRole('ORGANIZER')}
               className="btn btn-secondary btn-sm"
-              style={{ borderColor: 'rgba(236, 72, 153, 0.4)', color: '#f472b6' }}
+              style={{ borderColor: 'rgba(255, 61, 141, 0.4)', color: '#ff3d8d' }}
             >
               <Sparkles size={14} />
-              Switch to Organizer Role
+              <span>Switch to Organizer Role</span>
             </button>
           )}
 
           <button onClick={openCreateModal} className="btn btn-primary">
             <PlusCircle size={18} />
-            Create Event
+            <span>Create Campus Event</span>
           </button>
         </div>
       </div>
 
       {/* Role Reminder if not in Organizer role */}
       {!isOrganizer && (
-        <div style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', background: 'rgba(236, 72, 153, 0.1)', border: '1px solid rgba(236, 72, 153, 0.3)', color: '#fbcfe8', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
-            <ShieldAlert size={18} style={{ color: '#f472b6' }} />
-            <span>You are currently viewing as <strong>{user?.role || 'Attendee'}</strong>. Click 'Switch to Organizer Role' to enable full creation/editing permissions.</span>
+        <div
+          style={{
+            marginBottom: '1.75rem',
+            padding: '1rem 1.25rem',
+            borderRadius: 'var(--radius-md)',
+            background: 'rgba(255, 61, 141, 0.09)',
+            border: '1px solid rgba(255, 61, 141, 0.3)',
+            color: '#ffa6cb',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '0.75rem',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', fontSize: '0.875rem' }}>
+            <ShieldAlert size={18} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
+            <span>
+              You are signed in as <strong>{user?.role || 'Attendee'}</strong>.
+              {isMockMode
+                ? " Click 'Switch to Organizer Role' to simulate event publishing and edits."
+                : ' Organizer privileges are required by the backend to create or modify events.'}
+            </span>
           </div>
-          <button onClick={() => switchRole('ORGANIZER')} className="btn btn-sm btn-primary" style={{ flexShrink: 0 }}>
-            Activate Role
-          </button>
+          {isMockMode && (
+            <button onClick={() => switchRole('ORGANIZER')} className="btn btn-sm btn-primary" style={{ flexShrink: 0 }}>
+              Activate Role
+            </button>
+          )}
         </div>
       )}
 
@@ -208,16 +228,17 @@ export default function OrganizerDashboardPage() {
       ) : error ? (
         <ErrorMessage title="Error fetching events" message={error} onRetry={fetchOrganizerEvents} />
       ) : events.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>No events published yet.</p>
+        <div className="card" style={{ textAlign: 'center', padding: '3.5rem 2rem', background: '#191921' }}>
+          <p style={{ color: 'var(--text-secondary)', marginBottom: '1.25rem', fontSize: '1rem' }}>No events published yet.</p>
           <button onClick={openCreateModal} className="btn btn-primary">
-            Create Your First Event
+            <PlusCircle size={18} />
+            <span>Create Your First Event</span>
           </button>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.5rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.75rem' }}>
           {events.map((event) => (
-            <div key={event.eventId} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <div key={event.eventId} className="card card-hoverable" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', background: '#191921', borderColor: 'var(--border-subtle)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
                 <span className="category-pill">{event.category || 'General'}</span>
                 <span className="status-badge badge-active">{event.status || 'PUBLISHED'}</span>
@@ -225,10 +246,10 @@ export default function OrganizerDashboardPage() {
 
               <h3 style={{ fontSize: '1.25rem', lineHeight: 1.3 }}>{event.title}</h3>
 
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem', fontSize: '0.825rem', color: 'var(--text-secondary)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Calendar size={14} style={{ color: 'var(--accent-primary)' }} />
-                  <span>{new Date(event.startAt).toLocaleDateString()}</span>
+                  <span>{new Date(event.startAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</span>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <MapPin size={14} style={{ color: 'var(--accent-secondary)' }} />
@@ -239,14 +260,14 @@ export default function OrganizerDashboardPage() {
               <CapacityBar confirmed={event.confirmedCount} capacity={event.capacity} />
 
               {/* Action Buttons */}
-              <div style={{ marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '0.5rem' }}>
+              <div style={{ marginTop: 'auto', paddingTop: '0.85rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '0.55rem' }}>
                 <button
                   onClick={() => viewStats(event)}
                   className="btn btn-sm btn-primary"
                   style={{ flex: 1 }}
                 >
                   <BarChart3 size={14} />
-                  Analytics
+                  <span>Analytics</span>
                 </button>
                 <button
                   onClick={() => viewAttendees(event)}
@@ -254,7 +275,7 @@ export default function OrganizerDashboardPage() {
                   title="View Attendee List"
                 >
                   <Users size={14} />
-                  Attendees
+                  <span>Attendees</span>
                 </button>
                 <button
                   onClick={() => openEditModal(event)}
@@ -272,18 +293,18 @@ export default function OrganizerDashboardPage() {
       {/* Create / Edit Modal */}
       {showCreateModal && (
         <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.25rem' }}>
+              <h2 style={{ fontSize: '1.35rem' }}>
                 {editingEvent ? 'Edit Event Details' : 'Create Campus Event'}
               </h2>
-              <button onClick={() => setShowCreateModal(false)} style={{ color: 'var(--text-muted)' }}>
+              <button onClick={() => setShowCreateModal(false)} aria-label="Close modal" style={{ color: 'var(--text-muted)' }}>
                 <X size={20} />
               </button>
             </div>
 
             {formError && (
-              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)', color: '#fca5a5', fontSize: '0.8125rem' }}>
+              <div style={{ marginBottom: '1.25rem', padding: '0.75rem 1rem', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', borderRadius: 'var(--radius-md)', color: '#fca5a5', fontSize: '0.825rem' }}>
                 {formError}
               </div>
             )}
@@ -329,7 +350,7 @@ export default function OrganizerDashboardPage() {
                   />
                   {editingEvent && (
                     <span className="form-helper">
-                      Minimum {editingEvent.confirmedCount} (cannot reduce below confirmed RSVPs)
+                      Min {editingEvent.confirmedCount} (cannot reduce below confirmed RSVPs)
                     </span>
                   )}
                 </div>
@@ -393,7 +414,7 @@ export default function OrganizerDashboardPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.75rem' }}>
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
@@ -417,15 +438,15 @@ export default function OrganizerDashboardPage() {
       {/* Analytics & Stats Modal */}
       {statsEvent && (
         <div className="modal-overlay" onClick={() => setStatsEvent(null)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '540px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <div>
-                <span style={{ fontSize: '0.75rem', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-secondary)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '0.05em' }}>
                   Live Event Analytics
                 </span>
-                <h3 style={{ fontSize: '1.25rem', marginTop: '0.15rem' }}>{statsEvent.title}</h3>
+                <h3 style={{ fontSize: '1.3rem', marginTop: '0.2rem' }}>{statsEvent.title}</h3>
               </div>
-              <button onClick={() => setStatsEvent(null)} style={{ color: 'var(--text-muted)' }}>
+              <button onClick={() => setStatsEvent(null)} aria-label="Close modal" style={{ color: 'var(--text-muted)' }}>
                 <X size={20} />
               </button>
             </div>
@@ -435,42 +456,42 @@ export default function OrganizerDashboardPage() {
             ) : statsData ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                  <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Capacity</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)' }}>{statsData.capacity}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Allocated Seats</div>
+                  <div style={{ background: '#14141b', padding: '1.15rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ fontSize: '0.725rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Total Capacity</div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: 'var(--text-primary)', marginTop: '0.2rem' }}>{statsData.capacity}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Allocated Seats</div>
                   </div>
 
-                  <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#34d399', textTransform: 'uppercase' }}>Confirmed RSVPs</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#34d399' }}>{statsData.confirmedCount}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Active Bookings</div>
+                  <div style={{ background: 'rgba(16, 185, 129, 0.08)', padding: '1.15rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                    <div style={{ fontSize: '0.725rem', color: '#34d399', textTransform: 'uppercase', fontWeight: 600 }}>Confirmed RSVPs</div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: '#34d399', marginTop: '0.2rem' }}>{statsData.confirmedCount}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Booked Passes</div>
                   </div>
 
-                  <div style={{ background: 'rgba(245, 158, 11, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#fbbf24', textTransform: 'uppercase' }}>Waitlist</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#fbbf24' }}>{statsData.waitlistCount}</div>
+                  <div style={{ background: 'rgba(255, 138, 61, 0.08)', padding: '1.15rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(255, 138, 61, 0.3)' }}>
+                    <div style={{ fontSize: '0.725rem', color: '#ff9a54', textTransform: 'uppercase', fontWeight: 600 }}>Waitlist Queue</div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: '#ff9a54', marginTop: '0.2rem' }}>{statsData.waitlistCount}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>In FIFO Queue</div>
                   </div>
 
-                  <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#60a5fa', textTransform: 'uppercase' }}>Checked In</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#60a5fa' }}>{statsData.checkedInCount}</div>
+                  <div style={{ background: 'rgba(59, 130, 246, 0.08)', padding: '1.15rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
+                    <div style={{ fontSize: '0.725rem', color: '#60a5fa', textTransform: 'uppercase', fontWeight: 600 }}>Checked In</div>
+                    <div style={{ fontSize: '1.85rem', fontWeight: 800, color: '#60a5fa', marginTop: '0.2rem' }}>{statsData.checkedInCount}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Venue Arrivals</div>
                   </div>
                 </div>
 
-                {/* Attendance Percentage Ring/Bar */}
-                <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>Attendance Rate</span>
-                    <span style={{ fontWeight: 800, color: '#60a5fa', fontSize: '1.125rem' }}>{statsData.attendancePercentage}%</span>
+                {/* Attendance Rate */}
+                <div style={{ background: '#14141b', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.9rem' }}>Venue Attendance Rate</span>
+                    <span style={{ fontWeight: 800, color: 'var(--accent-primary)', fontSize: '1.25rem' }}>{statsData.attendancePercentage}%</span>
                   </div>
-                  <div className="capacity-bar-track">
-                    <div className="capacity-bar-fill capacity-safe" style={{ width: `${statsData.attendancePercentage}%`, background: 'linear-gradient(90deg, #3b82f6, #6366f1)' }} />
+                  <div className="capacity-bar-track" style={{ height: '10px' }}>
+                    <div className="capacity-bar-fill" style={{ width: `${statsData.attendancePercentage}%`, background: 'var(--accent-gradient)' }} />
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', display: 'block' }}>
-                    {statsData.checkedInCount} of {statsData.confirmedCount} confirmed attendees checked in.
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.5rem', display: 'block' }}>
+                    {statsData.checkedInCount} of {statsData.confirmedCount} registered attendees have checked in.
                   </span>
                 </div>
               </div>
@@ -485,12 +506,12 @@ export default function OrganizerDashboardPage() {
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
               <div>
-                <span style={{ fontSize: '0.75rem', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--accent-secondary)', textTransform: 'uppercase', fontWeight: 800, letterSpacing: '0.05em' }}>
                   Attendee Registry
                 </span>
-                <h3 style={{ fontSize: '1.25rem', marginTop: '0.15rem' }}>{attendeesModalEvent.title}</h3>
+                <h3 style={{ fontSize: '1.3rem', marginTop: '0.2rem' }}>{attendeesModalEvent.title}</h3>
               </div>
-              <button onClick={() => setAttendeesModalEvent(null)} style={{ color: 'var(--text-muted)' }}>
+              <button onClick={() => setAttendeesModalEvent(null)} aria-label="Close modal" style={{ color: 'var(--text-muted)' }}>
                 <X size={20} />
               </button>
             </div>
@@ -498,18 +519,18 @@ export default function OrganizerDashboardPage() {
             {attendeesLoading ? (
               <LoadingSpinner message="Retrieving attendee records..." />
             ) : attendeesList.length === 0 ? (
-              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>
-                No attendees registered yet.
+              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2.5rem 0' }}>
+                No attendees registered yet for this event.
               </p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '400px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '420px', overflowY: 'auto' }}>
                 {attendeesList.map((a) => (
-                  <div key={a.ticketId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', background: 'rgba(15, 23, 42, 0.7)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                  <div key={a.ticketId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.85rem 1.15rem', background: '#14141b', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{a.attendeeName}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{a.attendeeEmail}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '0.6875rem', fontFamily: 'monospace', marginTop: '0.2rem' }}>
-                        ID: {a.ticketId}
+                      <div style={{ fontWeight: 700, fontSize: '0.95rem' }}>{a.attendeeName}</div>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.78rem' }}>{a.attendeeEmail}</div>
+                      <div style={{ color: 'var(--accent-secondary)', fontSize: '0.72rem', fontFamily: 'monospace', marginTop: '0.2rem' }}>
+                        Ticket: {a.ticketId}
                       </div>
                     </div>
                     <StatusBadge status={a.status} />
