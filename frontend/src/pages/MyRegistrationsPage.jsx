@@ -6,12 +6,11 @@ import {
   MapPin, 
   Clock, 
   CheckCircle, 
-  XCircle, 
+  X, 
   AlertCircle, 
   QrCode, 
-  ArrowRight,
-  Sparkles,
-  ExternalLink
+  Eye,
+  Trash2
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import * as rsvpService from '../services/rsvpService';
@@ -55,7 +54,9 @@ export default function MyRegistrationsPage() {
   }, [isAuthenticated]);
 
   const handleCancel = async (eventId) => {
-    if (!window.confirm('Are you sure you want to cancel this registration? Your ticket will be released to the waitlist.')) return;
+    if (!window.confirm('Are you sure you want to cancel this registration? Your reserved seat will be transferred to the waitlist.')) {
+      return;
+    }
     try {
       setActionLoading(true);
       setFeedback(null);
@@ -96,7 +97,7 @@ export default function MyRegistrationsPage() {
         icon={Ticket}
         title="Sign in to view your campus passes"
         description="Access your confirmed digital QR tickets, monitor your waitlist position, and manage reservations."
-        actionLabel="Sign In"
+        actionLabel="Sign In to Marque"
         onAction={() => navigate('/auth', { state: { from: '/my-registrations' } })}
       />
     );
@@ -109,32 +110,29 @@ export default function MyRegistrationsPage() {
     return true;
   });
 
+  const defaultBanner = 'https://images.unsplash.com/photo-1540575467063-178a50c2df87?auto=format&fit=crop&w=800&q=80';
+
   return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1.25rem', marginBottom: '2rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {/* Header and Filter Tabs */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '2.15rem', marginBottom: '0.35rem' }}>My Registrations</h1>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.95rem' }}>
-            Manage your official campus passes, queue positions, and single-use digital tickets.
+          <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>My RSVPs</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+            Manage your official event registrations, queue positions, and digital entry tickets.
           </p>
         </div>
 
-        {/* Filter Tabs */}
-        <div style={{ display: 'flex', gap: '0.35rem', background: '#191921', padding: '0.3rem', borderRadius: 'var(--radius-full)', border: '1px solid var(--border-subtle)' }}>
+        {/* Status Tabs */}
+        <div style={{ display: 'flex', gap: '0.35rem', background: 'var(--bg-card)', padding: '0.25rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}>
           {['ALL', 'CONFIRMED', 'WAITLISTED', 'CANCELLED'].map((tab) => (
             <button
               key={tab}
               onClick={() => setStatusFilter(tab)}
-              className={`btn btn-sm ${statusFilter === tab ? 'btn-primary' : 'btn-secondary'}`}
-              style={{
-                borderRadius: 'var(--radius-full)',
-                fontSize: '0.78rem',
-                padding: '0.35rem 0.85rem',
-                border: statusFilter === tab ? 'none' : 'transparent',
-              }}
+              className={`btn btn-sm ${statusFilter === tab ? 'btn-primary' : 'btn-ghost'}`}
+              style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
             >
-              {tab === 'ALL' ? 'All Passes' : tab.charAt(0) + tab.slice(1).toLowerCase()}
+              {tab === 'ALL' ? 'All RSVPs' : tab.charAt(0) + tab.slice(1).toLowerCase()}
             </button>
           ))}
         </div>
@@ -144,126 +142,147 @@ export default function MyRegistrationsPage() {
       {feedback && (
         <div
           style={{
-            marginBottom: '1.75rem',
-            padding: '1rem 1.25rem',
-            borderRadius: 'var(--radius-md)',
-            background: feedback.type === 'success' ? 'rgba(16, 185, 129, 0.12)' : 'rgba(239, 68, 68, 0.12)',
-            border: `1px solid ${feedback.type === 'success' ? 'rgba(16, 185, 129, 0.35)' : 'rgba(239, 68, 68, 0.35)'}`,
-            color: feedback.type === 'success' ? '#34d399' : '#f87171',
+            padding: '0.75rem 1rem',
+            borderRadius: 'var(--radius-sm)',
+            background: feedback.type === 'success' ? 'var(--status-success-bg)' : 'var(--status-error-bg)',
+            border: `1px solid ${feedback.type === 'success' ? 'var(--status-success-border)' : 'var(--status-error-border)'}`,
+            color: feedback.type === 'success' ? 'var(--status-success)' : 'var(--status-error)',
             display: 'flex',
             alignItems: 'center',
-            gap: '0.65rem',
-            fontSize: '0.925rem',
+            justifyContent: 'space-between',
+            gap: '0.5rem',
+            fontSize: '0.875rem',
           }}
         >
-          {feedback.type === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
-          <span>{feedback.message}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {feedback.type === 'success' ? <CheckCircle size={16} /> : <AlertCircle size={16} />}
+            <span>{feedback.message}</span>
+          </div>
+          <button onClick={() => setFeedback(null)} aria-label="Dismiss feedback" style={{ color: 'inherit' }}>
+            <X size={15} />
+          </button>
         </div>
       )}
 
-      {/* Content */}
-      {loading ? (
-        <LoadingSpinner message="Loading your passes..." />
-      ) : error ? (
-        <ErrorMessage title="Error fetching registrations" message={error} onRetry={loadRsvps} />
-      ) : filteredRsvps.length === 0 ? (
-        <EmptyState
-          icon={Ticket}
-          title="No passes match this filter"
-          description={
-            statusFilter === 'ALL'
-              ? "You haven't reserved any passes yet. Explore upcoming campus events to get started!"
-              : `No registrations found with status '${statusFilter}'.`
-          }
-          actionLabel="Browse Campus Events"
-          onAction={() => navigate('/events')}
-        />
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: '1.75rem' }}>
-          {filteredRsvps.map((rsvp) => {
-            const formattedDate = rsvp.event?.startAt
-              ? new Date(rsvp.event.startAt).toLocaleString('en-US', {
-                  weekday: 'short',
-                  month: 'short',
-                  day: 'numeric',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              : 'TBA';
+      {/* Content List */}
+      <section aria-label="Registration Records">
+        {loading ? (
+          <LoadingSpinner message="Retrieving your campus passes..." />
+        ) : error ? (
+          <ErrorMessage title="Error fetching registrations" message={error} onRetry={loadRsvps} />
+        ) : filteredRsvps.length === 0 ? (
+          <EmptyState
+            icon={Ticket}
+            title="No registrations found"
+            description={
+              statusFilter === 'ALL'
+                ? "You haven't reserved any event tickets yet. Explore upcoming campus events to get started!"
+                : `No registrations found with status '${statusFilter}'.`
+            }
+            actionLabel="Discover Events"
+            onAction={() => navigate('/events')}
+          />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {filteredRsvps.map((rsvp) => {
+              const formattedDate = rsvp.event?.startAt
+                ? new Date(rsvp.event.startAt).toLocaleString('en-US', {
+                    weekday: 'short',
+                    month: 'short',
+                    day: 'numeric',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })
+                : 'TBA';
 
-            return (
-              <div key={rsvp.rsvpId} className="card card-hoverable" style={{ display: 'flex', flexDirection: 'column', gap: '1rem', background: '#191921', borderColor: 'var(--border-subtle)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.75rem' }}>
-                  <h3 style={{ fontSize: '1.18rem', lineHeight: 1.35 }}>
-                    <Link to={`/events/${rsvp.eventId}`} style={{ color: 'var(--text-primary)' }}>
-                      {rsvp.event?.title || 'Campus Event'}
-                    </Link>
-                  </h3>
-                  <StatusBadge status={rsvp.status} />
-                </div>
+              return (
+                <article key={rsvp.rsvpId} className="event-row">
+                  <div className="event-row-left">
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.45rem' }}>
+                        <StatusBadge status={rsvp.status} />
+                        {rsvp.status === 'WAITLISTED' && (
+                          <span style={{ fontSize: '0.75rem', color: 'var(--status-warning)', fontWeight: 600 }}>
+                            Queue Position #{rsvp.queuePosition || 1}
+                          </span>
+                        )}
+                        {rsvp.ticketId && (
+                          <span style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-muted)' }}>
+                            Ticket ID: {rsvp.ticketId}
+                          </span>
+                        )}
+                      </div>
 
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', fontSize: '0.825rem', color: 'var(--text-secondary)' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <Calendar size={14} style={{ color: 'var(--accent-primary)' }} />
-                    <span>{formattedDate}</span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <MapPin size={14} style={{ color: 'var(--accent-secondary)' }} />
-                    <span>{rsvp.event?.venue || 'Campus Venue'}</span>
-                  </div>
-
-                  {rsvp.status === 'WAITLISTED' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', color: '#ff9a54', fontWeight: 600, marginTop: '0.35rem', background: 'rgba(255, 138, 61, 0.1)', padding: '0.35rem 0.65rem', borderRadius: 'var(--radius-sm)' }}>
-                      <Clock size={14} />
-                      <span>Waitlist Queue Position: #{rsvp.queuePosition || 1}</span>
+                      <h3 className="event-row-title">
+                        <Link to={`/events/${rsvp.eventId}`}>
+                          {rsvp.event?.title || 'Campus Event'}
+                        </Link>
+                      </h3>
                     </div>
-                  )}
 
-                  {rsvp.ticketId && (
-                    <div style={{ fontSize: '0.75rem', fontFamily: 'monospace', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                      Ticket ID: <span style={{ color: 'var(--accent-secondary)' }}>{rsvp.ticketId}</span>
+                    <div className="event-meta-list">
+                      <div className="event-meta-item">
+                        <Calendar size={14} style={{ color: 'var(--accent-pink)' }} />
+                        <span>{formattedDate}</span>
+                      </div>
+                      <div className="event-meta-item">
+                        <MapPin size={14} style={{ color: 'var(--accent-orange)' }} />
+                        <span>{rsvp.event?.venue || 'Campus Venue'}</span>
+                      </div>
                     </div>
-                  )}
-                </div>
 
-                {/* Actions */}
-                <div style={{ marginTop: 'auto', paddingTop: '0.85rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '0.65rem' }}>
-                  {rsvp.status === 'CONFIRMED' && rsvp.ticketId && (
-                    <button
-                      onClick={() => openTicket(rsvp)}
-                      className="btn btn-sm btn-primary"
-                      style={{ flex: 1 }}
-                    >
-                      <QrCode size={14} />
-                      <span>Digital Pass</span>
-                    </button>
-                  )}
+                    {/* Actions */}
+                    <div className="event-row-actions">
+                      <Link 
+                        to={`/events/${rsvp.eventId}`} 
+                        className="btn btn-sm btn-secondary"
+                      >
+                        <Eye size={13} />
+                        <span>Event Details</span>
+                      </Link>
 
-                  {rsvp.ticketId && (
-                    <Link
-                      to={`/tickets/${rsvp.ticketId}`}
-                      className="btn btn-sm btn-outline"
-                      title="Open Dedicated Ticket Page"
-                    >
-                      <ExternalLink size={14} />
-                    </Link>
-                  )}
+                      {rsvp.status === 'CONFIRMED' && rsvp.ticketId && (
+                        <button
+                          onClick={() => openTicket(rsvp)}
+                          className="btn btn-sm btn-primary"
+                        >
+                          <QrCode size={14} />
+                          <span>View QR Ticket</span>
+                        </button>
+                      )}
 
-                  {rsvp.status !== 'CANCELLED' && (
-                    <button
-                      onClick={() => handleCancel(rsvp.eventId)}
-                      disabled={actionLoading}
-                      className="btn btn-sm btn-danger"
-                    >
-                      Cancel
-                    </button>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+                      {rsvp.status !== 'CANCELLED' && (
+                        <button
+                          onClick={() => handleCancel(rsvp.eventId)}
+                          disabled={actionLoading}
+                          className="btn btn-sm btn-danger"
+                          title="Cancel RSVP"
+                        >
+                          <Trash2 size={13} />
+                          <span>Cancel RSVP</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Banner Image */}
+                  <div className="event-row-banner">
+                    <img 
+                      src={rsvp.event?.bannerUrl || defaultBanner} 
+                      alt={rsvp.event?.title || 'Event'} 
+                      loading="lazy"
+                      onError={(e) => {
+                        e.currentTarget.src = defaultBanner;
+                      }}
+                    />
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {/* Ticket Modal */}
       {activeTicket && (

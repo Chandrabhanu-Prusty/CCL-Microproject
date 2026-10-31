@@ -2,20 +2,20 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { 
-  Sparkles, 
   Mail, 
   Lock, 
   User, 
   ArrowRight, 
   ShieldCheck, 
-  Zap, 
   Eye, 
   EyeOff, 
+  Ticket,
   Calendar, 
   QrCode, 
   CheckCircle2, 
   AlertCircle,
-  Info
+  Info,
+  Sparkles
 } from 'lucide-react';
 
 export default function AuthPage() {
@@ -35,7 +35,7 @@ export default function AuthPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // Stakeholder type for signup: 'ATTENDEE' | 'ORGANIZER' | 'COORDINATOR'
+  // Stakeholder type indication: 'ATTENDEE' | 'ORGANIZER' | 'COORDINATOR'
   const [stakeholderType, setStakeholderType] = useState('ATTENDEE');
 
   // UI state
@@ -45,7 +45,6 @@ export default function AuthPage() {
 
   const returnUrl = location.state?.from || '/events';
 
-  // Clear errors when toggling modes
   useEffect(() => {
     setErrorMessage(null);
     setSuccessNotice(null);
@@ -76,20 +75,19 @@ export default function AuthPage() {
 
     try {
       if (isRegister) {
-        // Conforms to API_CONTRACT.md: public registration always creates an Attendee account.
-        // Role is not sent in the body; privileged roles require administrative approval.
-        await register(name.trim(), email.trim(), password);
+        // Conforms strictly to API_CONTRACT.md and SECURITY.md:
+        // Public registration always creates an ATTENDEE account.
+        // Role is NEVER sent in the public registration request.
+        const res = await register(name.trim(), email.trim(), password);
 
+        // Account is active with Attendee role
         if (stakeholderType !== 'ATTENDEE') {
-          // Provide transparent feedback about privileged access approval
           setSuccessNotice(
-            `Account successfully registered! As per campus security policy, new accounts default to Attendee permissions. Your request for ${
-              stakeholderType === 'ORGANIZER' ? 'Event Organizer' : 'Event Coordinator'
-            } privileges has been noted and requires faculty/lead approval.`
+            `Account created! Note that public registration grants Attendee access by default (${res.user?.role || 'ATTENDEE'}). Privileged Organizer or Coordinator access requires separate campus administrator approval.`
           );
           setTimeout(() => {
             navigate(returnUrl);
-          }, 2400);
+          }, 2200);
           return;
         }
 
@@ -102,7 +100,7 @@ export default function AuthPage() {
       console.error('Authentication failure:', err);
       if (err.code === 'NETWORK_ERROR') {
         setErrorMessage(
-          'Unable to reach the campus authentication service. Please check your network connection or verify that the API server is active.'
+          'Unable to reach the campus authentication service. Please check your network connection or backend API deployment.'
         );
       } else if (err.code === 'CONFIG_ERROR') {
         setErrorMessage(err.message);
@@ -139,44 +137,56 @@ export default function AuthPage() {
   };
 
   return (
-    <div style={{ maxWidth: isRegister ? '560px' : '440px', margin: '2rem auto', padding: '0 1rem', transition: 'max-width 0.25s ease' }}>
-      <div className="card" style={{ padding: '2.25rem 2rem' }}>
-        {/* Brand Header */}
-        <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
-          <div className="brand-icon-wrapper" style={{ margin: '0 auto 1rem', width: '46px', height: '46px' }}>
-            <Sparkles size={22} />
+    <div style={{ maxWidth: '480px', margin: '1rem auto 3rem', padding: '0 0.5rem' }}>
+      <div className="card" style={{ padding: '2rem' }}>
+        {/* Header */}
+        <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
+          <div className="brand-emblem" style={{ margin: '0 auto 0.75rem', width: '38px', height: '38px', fontSize: '1.25rem' }}>
+            M
           </div>
-          <h2 style={{ fontSize: '1.65rem', marginBottom: '0.35rem' }}>
-            {isRegister ? 'Create Your Campus Account' : 'Welcome to Marque'}
+          <h2 style={{ fontSize: '1.4rem', marginBottom: '0.25rem' }}>
+            {isRegister ? 'Create Your Campus Account' : 'Sign in to Marque'}
           </h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
-            {isRegister
-              ? 'Join official campus activities, RSVP for events, and access digital passes'
-              : 'Sign in to access your digital tickets, registrations, and dashboard'}
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem' }}>
+            {isRegister 
+              ? 'Reserve free event tickets, join waitlists, and access digital passes.' 
+              : 'Enter your campus credentials to access your registrations.'}
           </p>
         </div>
 
-        {/* Quick Demo Personas (Restricted strictly to mock mode) */}
-        {isMockMode && (
-          <div
-            style={{
-              marginBottom: '1.5rem',
-              background: 'rgba(255, 61, 141, 0.08)',
-              border: '1px solid rgba(255, 61, 141, 0.25)',
-              borderRadius: 'var(--radius-md)',
-              padding: '0.75rem 0.85rem',
-            }}
+        {/* Tab switcher: Sign in vs Register */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.35rem', background: '#14151B', padding: '0.25rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)', marginBottom: '1.5rem' }}>
+          <button
+            type="button"
+            onClick={() => setIsRegister(false)}
+            className={`btn btn-sm ${!isRegister ? 'btn-secondary' : 'btn-ghost'}`}
+            style={{ fontWeight: !isRegister ? 700 : 500 }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', fontWeight: 700, color: 'var(--accent-secondary)', textTransform: 'uppercase', marginBottom: '0.5rem', letterSpacing: '0.04em' }}>
-              <Zap size={13} />
-              Quick Demo Personas (Mock Mode Only)
+            Sign In
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsRegister(true)}
+            className={`btn btn-sm ${isRegister ? 'btn-secondary' : 'btn-ghost'}`}
+            style={{ fontWeight: isRegister ? 700 : 500 }}
+          >
+            Create Account
+          </button>
+        </div>
+
+        {/* Quick Demo Credentials in Mock Mode ONLY */}
+        {isMockMode && (
+          <div style={{ marginBottom: '1.25rem', background: '#14151B', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-sm)', padding: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.6875rem', fontWeight: 700, color: 'var(--accent-orange)', textTransform: 'uppercase', marginBottom: '0.45rem' }}>
+              <Sparkles size={12} />
+              <span>Mock Mode Demo Personas</span>
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.4rem' }}>
               <button
                 type="button"
                 onClick={() => setDemoCredentials('ATTENDEE')}
                 className="btn btn-sm btn-secondary"
-                style={{ fontSize: '0.7rem', padding: '0.35rem 0.25rem' }}
+                style={{ fontSize: '0.6875rem', padding: '0.3rem' }}
               >
                 Attendee
               </button>
@@ -184,7 +194,7 @@ export default function AuthPage() {
                 type="button"
                 onClick={() => setDemoCredentials('ORGANIZER')}
                 className="btn btn-sm btn-secondary"
-                style={{ fontSize: '0.7rem', padding: '0.35rem 0.25rem' }}
+                style={{ fontSize: '0.6875rem', padding: '0.3rem' }}
               >
                 Organizer
               </button>
@@ -192,7 +202,7 @@ export default function AuthPage() {
                 type="button"
                 onClick={() => setDemoCredentials('COORDINATOR')}
                 className="btn btn-sm btn-secondary"
-                style={{ fontSize: '0.7rem', padding: '0.35rem 0.25rem' }}
+                style={{ fontSize: '0.6875rem', padding: '0.3rem' }}
               >
                 Coordinator
               </button>
@@ -200,320 +210,257 @@ export default function AuthPage() {
           </div>
         )}
 
-        {/* Success Notice */}
-        {successNotice && (
-          <div
-            style={{
-              marginBottom: '1.25rem',
-              padding: '0.875rem 1rem',
-              background: 'rgba(16, 185, 129, 0.12)',
-              border: '1px solid rgba(16, 185, 129, 0.35)',
-              borderRadius: 'var(--radius-md)',
-              color: '#34d399',
-              fontSize: '0.85rem',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '0.5rem',
-            }}
-          >
-            <CheckCircle2 size={18} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
-            <span>{successNotice}</span>
-          </div>
-        )}
-
         {/* Error Alert */}
         {errorMessage && (
-          <div
-            style={{
-              marginBottom: '1.25rem',
-              padding: '0.875rem 1rem',
-              background: 'rgba(239, 68, 68, 0.12)',
-              border: '1px solid rgba(239, 68, 68, 0.35)',
-              borderRadius: 'var(--radius-md)',
-              color: '#fca5a5',
-              fontSize: '0.85rem',
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '0.5rem',
-            }}
-          >
-            <AlertCircle size={18} style={{ flexShrink: 0, marginTop: '0.1rem' }} />
+          <div style={{ marginBottom: '1.15rem', padding: '0.75rem 0.85rem', background: 'var(--status-error-bg)', border: '1px solid var(--status-error-border)', borderRadius: 'var(--radius-sm)', color: 'var(--status-error)', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <AlertCircle size={16} style={{ flexShrink: 0 }} />
             <span>{errorMessage}</span>
           </div>
         )}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit}>
-          {/* Stakeholder Selection Cards (Only on Sign-Up) */}
+        {/* Success Notice */}
+        {successNotice && (
+          <div style={{ marginBottom: '1.15rem', padding: '0.75rem 0.85rem', background: 'var(--status-success-bg)', border: '1px solid var(--status-success-border)', borderRadius: 'var(--radius-sm)', color: 'var(--status-success)', fontSize: '0.8125rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <CheckCircle2 size={16} style={{ flexShrink: 0 }} />
+            <span>{successNotice}</span>
+          </div>
+        )}
+
+        {/* Auth Form */}
+        <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.9rem' }}>
           {isRegister && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <label className="form-label" style={{ marginBottom: '0.65rem' }}>
-                How will you use Marque? *
-              </label>
-
-              <div className="stakeholder-grid">
-                {/* Option A: Attendee */}
-                <div
-                  className={`stakeholder-card ${stakeholderType === 'ATTENDEE' ? 'selected' : ''}`}
-                  onClick={() => setStakeholderType('ATTENDEE')}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setStakeholderType('ATTENDEE')}
-                  aria-pressed={stakeholderType === 'ATTENDEE'}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                    <div className="stakeholder-icon">
-                      <User size={18} />
-                    </div>
-                    {stakeholderType === 'ATTENDEE' && (
-                      <CheckCircle2 size={16} style={{ color: 'var(--accent-primary)' }} />
-                    )}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                    Attendee
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                    Discover events, RSVP, join waitlists, and claim digital passes.
-                  </div>
-                  <span style={{ fontSize: '0.675rem', color: '#34d399', fontWeight: 600, marginTop: 'auto' }}>
-                    Instant self-service
-                  </span>
-                </div>
-
-                {/* Option B: Event Organizer */}
-                <div
-                  className={`stakeholder-card ${stakeholderType === 'ORGANIZER' ? 'selected' : ''}`}
-                  onClick={() => setStakeholderType('ORGANIZER')}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setStakeholderType('ORGANIZER')}
-                  aria-pressed={stakeholderType === 'ORGANIZER'}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                    <div className="stakeholder-icon">
-                      <Calendar size={18} />
-                    </div>
-                    {stakeholderType === 'ORGANIZER' && (
-                      <CheckCircle2 size={16} style={{ color: 'var(--accent-primary)' }} />
-                    )}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                    Event Organizer
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                    Create events, set capacities, and view live attendance stats.
-                  </div>
-                  <span style={{ fontSize: '0.675rem', color: '#ff9a54', fontWeight: 600, marginTop: 'auto' }}>
-                    Requires approval
-                  </span>
-                </div>
-
-                {/* Option C: Event Coordinator */}
-                <div
-                  className={`stakeholder-card ${stakeholderType === 'COORDINATOR' ? 'selected' : ''}`}
-                  onClick={() => setStakeholderType('COORDINATOR')}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setStakeholderType('COORDINATOR')}
-                  aria-pressed={stakeholderType === 'COORDINATOR'}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
-                    <div className="stakeholder-icon">
-                      <QrCode size={18} />
-                    </div>
-                    {stakeholderType === 'COORDINATOR' && (
-                      <CheckCircle2 size={16} style={{ color: 'var(--accent-primary)' }} />
-                    )}
-                  </div>
-                  <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
-                    Event Coordinator
-                  </div>
-                  <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', lineHeight: 1.4 }}>
-                    Scan QR tickets at entrance and run manual attendee lookups.
-                  </div>
-                  <span style={{ fontSize: '0.675rem', color: '#ff9a54', fontWeight: 600, marginTop: 'auto' }}>
-                    Requires approval
-                  </span>
-                </div>
-              </div>
-
-              {/* Informational Policy Notice */}
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'flex-start',
-                  gap: '0.45rem',
-                  padding: '0.6rem 0.75rem',
-                  borderRadius: 'var(--radius-sm)',
-                  background: 'rgba(255, 255, 255, 0.03)',
-                  border: '1px solid var(--border-subtle)',
-                  fontSize: '0.75rem',
-                  color: 'var(--text-secondary)',
-                  lineHeight: 1.4,
-                }}
-              >
-                <Info size={14} style={{ color: 'var(--accent-secondary)', flexShrink: 0, marginTop: '0.1rem' }} />
-                <span>
-                  {stakeholderType === 'ATTENDEE'
-                    ? 'Attendee accounts are activated immediately for self-service event registration.'
-                    : 'All public signups default to Attendee. Privileged Organizer and Coordinator roles require administrative verification before elevated permissions are granted.'}
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* Full Name (Sign-up only) */}
-          {isRegister && (
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">Full Name *</label>
               <div style={{ position: 'relative' }}>
-                <User size={18} style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <User size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                 <input
                   type="text"
                   placeholder="e.g. Chandrabhanu Prusty"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="form-input"
-                  style={{ paddingLeft: '2.5rem' }}
+                  style={{ paddingLeft: '2.35rem' }}
                   required={isRegister}
                 />
               </div>
             </div>
           )}
 
-          {/* Campus Email */}
-          <div className="form-group">
-            <label className="form-label">Campus Email Address *</label>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Email Address *</label>
             <div style={{ position: 'relative' }}>
-              <Mail size={18} style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <Mail size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type="email"
-                placeholder="your.email@campus.edu"
+                placeholder="name@ves.ac.in"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="form-input"
-                style={{ paddingLeft: '2.5rem' }}
+                style={{ paddingLeft: '2.35rem' }}
                 required
               />
             </div>
           </div>
 
-          {/* Password */}
-          <div className="form-group">
-            <label className="form-label">
-              <span>Password *</span>
-              {isRegister && <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Min. 8 characters</span>}
-            </label>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label className="form-label">Password *</label>
             <div style={{ position: 'relative' }}>
-              <Lock size={18} style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+              <Lock size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
               <input
                 type={showPassword ? 'text' : 'password'}
-                placeholder="••••••••••••"
+                placeholder="At least 8 characters"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="form-input"
-                style={{ paddingLeft: '2.5rem', paddingRight: '2.5rem' }}
+                style={{ paddingLeft: '2.35rem', paddingRight: '2.35rem' }}
                 required
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
-                style={{ position: 'absolute', right: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+                style={{ position: 'absolute', right: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
               >
-                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             </div>
           </div>
 
-          {/* Confirm Password (Sign-up only) */}
           {isRegister && (
-            <div className="form-group">
+            <div className="form-group" style={{ marginBottom: 0 }}>
               <label className="form-label">Confirm Password *</label>
               <div style={{ position: 'relative' }}>
-                <Lock size={18} style={{ position: 'absolute', left: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <Lock size={16} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
                 <input
                   type={showConfirmPassword ? 'text' : 'password'}
-                  placeholder="••••••••••••"
+                  placeholder="Re-enter your password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   className="form-input"
-                  style={{
-                    paddingLeft: '2.5rem',
-                    paddingRight: '2.5rem',
-                    borderColor:
-                      confirmPassword && password !== confirmPassword ? 'rgba(239, 68, 68, 0.6)' : undefined,
-                  }}
+                  style={{ paddingLeft: '2.35rem', paddingRight: '2.35rem' }}
                   required={isRegister}
                 />
                 <button
                   type="button"
                   onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                  aria-label={showConfirmPassword ? 'Hide confirm password' : 'Show confirm password'}
-                  style={{ position: 'absolute', right: '0.875rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+                  aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                  style={{ position: 'absolute', right: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
                 >
-                  {showConfirmPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                  {showConfirmPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                 </button>
               </div>
-              {confirmPassword && password !== confirmPassword && (
-                <span style={{ fontSize: '0.75rem', color: '#f87171', marginTop: '0.2rem' }}>
-                  Passwords do not match.
-                </span>
+            </div>
+          )}
+
+          {/* Stakeholder Selection: "How will you use Marque?" */}
+          {isRegister && (
+            <div style={{ marginTop: '0.5rem', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <label className="form-label">How will you use Marque?</label>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.45rem' }}>
+                {/* Option 1: Attendee */}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.65rem',
+                    padding: '0.65rem 0.75rem',
+                    borderRadius: 'var(--radius-sm)',
+                    background: stakeholderType === 'ATTENDEE' ? '#14151B' : 'transparent',
+                    border: `1px solid ${stakeholderType === 'ATTENDEE' ? 'var(--accent-pink)' : 'var(--border-subtle)'}`,
+                    cursor: 'pointer',
+                    transition: 'all var(--transition-fast)',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="stakeholder"
+                    value="ATTENDEE"
+                    checked={stakeholderType === 'ATTENDEE'}
+                    onChange={() => setStakeholderType('ATTENDEE')}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Attendee
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Discover campus events and reserve free seats.
+                    </div>
+                  </div>
+                </label>
+
+                {/* Option 2: Event Organizer */}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.65rem',
+                    padding: '0.65rem 0.75rem',
+                    borderRadius: 'var(--radius-sm)',
+                    background: stakeholderType === 'ORGANIZER' ? '#14151B' : 'transparent',
+                    border: `1px solid ${stakeholderType === 'ORGANIZER' ? 'var(--accent-pink)' : 'var(--border-subtle)'}`,
+                    cursor: 'pointer',
+                    transition: 'all var(--transition-fast)',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="stakeholder"
+                    value="ORGANIZER"
+                    checked={stakeholderType === 'ORGANIZER'}
+                    onChange={() => setStakeholderType('ORGANIZER')}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Event Organizer
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Create and manage campus events.
+                    </div>
+                  </div>
+                </label>
+
+                {/* Option 3: Event Coordinator */}
+                <label
+                  style={{
+                    display: 'flex',
+                    alignItems: 'flex-start',
+                    gap: '0.65rem',
+                    padding: '0.65rem 0.75rem',
+                    borderRadius: 'var(--radius-sm)',
+                    background: stakeholderType === 'COORDINATOR' ? '#14151B' : 'transparent',
+                    border: `1px solid ${stakeholderType === 'COORDINATOR' ? 'var(--accent-pink)' : 'var(--border-subtle)'}`,
+                    cursor: 'pointer',
+                    transition: 'all var(--transition-fast)',
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="stakeholder"
+                    value="COORDINATOR"
+                    checked={stakeholderType === 'COORDINATOR'}
+                    onChange={() => setStakeholderType('COORDINATOR')}
+                    style={{ marginTop: '3px' }}
+                  />
+                  <div>
+                    <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Event Coordinator
+                    </div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
+                      Manage event check-in and verify ticket scans.
+                    </div>
+                  </div>
+                </label>
+              </div>
+
+              {/* Informative Security Explanation */}
+              {stakeholderType !== 'ATTENDEE' && (
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.45rem', fontSize: '0.72rem', color: 'var(--text-secondary)', background: '#14151B', padding: '0.5rem 0.65rem', borderRadius: 'var(--radius-xs)', border: '1px solid var(--border-subtle)' }}>
+                  <Info size={14} style={{ color: 'var(--accent-orange)', flexShrink: 0, marginTop: '1px' }} />
+                  <span>
+                    New accounts receive Attendee access by default. Organizer or Coordinator permissions require separate campus administrative approval.
+                  </span>
+                </div>
               )}
             </div>
           )}
 
-          {/* Submit Button with dynamic role CTA */}
           <button
             type="submit"
             disabled={loading}
             className="btn btn-primary"
-            style={{ width: '100%', marginTop: '0.85rem', height: '46px', fontSize: '0.95rem' }}
+            style={{ width: '100%', marginTop: '0.5rem' }}
           >
-            {loading ? (
-              'Authenticating...'
-            ) : isRegister ? (
-              stakeholderType === 'ATTENDEE' ? (
-                <>
-                  <span>Create Account</span>
-                  <ArrowRight size={16} />
-                </>
-              ) : stakeholderType === 'ORGANIZER' ? (
-                <>
-                  <span>Register & Request Organizer Access</span>
-                  <ArrowRight size={16} />
-                </>
-              ) : (
-                <>
-                  <span>Register & Request Coordinator Access</span>
-                  <ArrowRight size={16} />
-                </>
-              )
-            ) : (
-              <>
-                <span>Sign In</span>
-                <ArrowRight size={16} />
-              </>
-            )}
+            {loading ? 'Authenticating...' : isRegister ? 'Register Free' : 'Sign In'}
+            <ArrowRight size={15} />
           </button>
         </form>
 
-        {/* Mode Toggle (Sign In <-> Register) */}
-        <div style={{ marginTop: '1.75rem', textAlign: 'center', borderTop: '1px solid var(--border-subtle)', paddingTop: '1.25rem' }}>
-          <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)' }}>
-            {isRegister ? 'Already registered on Marque?' : "Don't have a campus account yet?"}
-            <button
-              type="button"
-              onClick={() => {
-                setIsRegister(!isRegister);
-                setErrorMessage(null);
-                setSuccessNotice(null);
-              }}
-              style={{ color: 'var(--accent-primary)', fontWeight: 700, marginLeft: '0.4rem' }}
-            >
-              {isRegister ? 'Sign In' : 'Create Free Account'}
-            </button>
-          </p>
+        <div style={{ marginTop: '1.25rem', textAlign: 'center', borderTop: '1px solid var(--border-subtle)', paddingTop: '1rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
+          {isRegister ? (
+            <span>
+              Already have an account?{' '}
+              <button 
+                type="button" 
+                onClick={() => setIsRegister(false)}
+                style={{ color: 'var(--accent-pink)', fontWeight: 600 }}
+              >
+                Sign In
+              </button>
+            </span>
+          ) : (
+            <span>
+              Don't have an account?{' '}
+              <button 
+                type="button" 
+                onClick={() => setIsRegister(true)}
+                style={{ color: 'var(--accent-pink)', fontWeight: 600 }}
+              >
+                Create Account
+              </button>
+            </span>
+          )}
         </div>
       </div>
     </div>
