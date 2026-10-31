@@ -32,17 +32,42 @@ function ProtectedRoute({ children }) {
 }
 
 /**
+ * Role-Based Route Guard.
+ * Restricts access to specified roles. Unauthorized users are redirected to fallbackPath.
+ */
+function RoleRoute({ allowedRoles, fallbackPath = '/events', children }) {
+  const { isAuthenticated, role, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return <LoadingSpinner message="Checking permissions..." />;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/auth" state={{ from: location.pathname }} replace />;
+  }
+
+  if (!allowedRoles.includes(role)) {
+    return <Navigate to={fallbackPath} replace />;
+  }
+
+  return children;
+}
+
+/**
  * Guest-only route wrapper for AuthPage.
- * If user is already signed in, redirect them directly to events catalog.
+ * If user is already signed in, redirect them directly based on role.
  */
 function GuestRoute({ children }) {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, role, loading } = useAuth();
 
   if (loading) {
     return <LoadingSpinner message="Checking session..." />;
   }
 
   if (isAuthenticated) {
+    if (role === 'ORGANIZER') return <Navigate to="/organizer" replace />;
+    if (role === 'COORDINATOR') return <Navigate to="/checkin" replace />;
     return <Navigate to="/events" replace />;
   }
 
@@ -50,21 +75,26 @@ function GuestRoute({ children }) {
 }
 
 export default function AppRoutes() {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, role, loading } = useAuth();
+
+  const getHomeRedirect = () => {
+    if (!isAuthenticated) return '/auth';
+    if (role === 'ORGANIZER') return '/organizer';
+    if (role === 'COORDINATOR') return '/checkin';
+    return '/events';
+  };
 
   return (
     <Routes>
       <Route path="/" element={<MainLayout />}>
-        {/* On root visit, if not logged in, show Login/Sign-in page first */}
+        {/* On root visit, redirect intelligently based on session & role */}
         <Route
           index
           element={
             loading ? (
               <LoadingSpinner message="Initializing Marque..." />
-            ) : isAuthenticated ? (
-              <Navigate to="/events" replace />
             ) : (
-              <Navigate to="/auth" replace />
+              <Navigate to={getHomeRedirect()} replace />
             )
           }
         />
@@ -79,7 +109,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* Protected Campus Event Pages (Requires Login) */}
+        {/* Campus Event Discovery (All authenticated users: Attendee, Organizer, Coordinator) */}
         <Route
           path="events"
           element={
@@ -97,7 +127,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* Attendee Registrations & Digital Passes (Requires Login) */}
+        {/* Attendee Registrations & Digital Passes (All authenticated users can RSVP and hold personal passes) */}
         <Route
           path="my-registrations"
           element={
@@ -115,23 +145,31 @@ export default function AppRoutes() {
           }
         />
 
-        {/* Organizer Dashboard (Requires Login) */}
+        {/* Organizer Dashboard (Strictly ORGANIZER role only) */}
         <Route
           path="organizer"
           element={
-            <ProtectedRoute>
+            <RoleRoute allowedRoles={['ORGANIZER']} fallbackPath="/events">
               <OrganizerDashboardPage />
-            </ProtectedRoute>
+            </RoleRoute>
           }
         />
 
-        {/* Coordinator Check-in (Requires Login) */}
+        {/* Coordinator Check-in Workspace (COORDINATOR and ORGANIZER roles only) */}
         <Route
           path="checkin"
           element={
-            <ProtectedRoute>
+            <RoleRoute allowedRoles={['COORDINATOR', 'ORGANIZER']} fallbackPath="/events">
               <CoordinatorCheckinPage />
-            </ProtectedRoute>
+            </RoleRoute>
+          }
+        />
+        <Route
+          path="checkin/:eventId"
+          element={
+            <RoleRoute allowedRoles={['COORDINATOR', 'ORGANIZER']} fallbackPath="/events">
+              <CoordinatorCheckinPage />
+            </RoleRoute>
           }
         />
 

@@ -1,73 +1,82 @@
 # Team Responsibilities
 
-## Shared rules
+## Shared Rules
 
-- Shared repository: https://github.com/Chandrabhanu-Prusty/CCL-Microproject
-- Agree on `API_CONTRACT.md` and `DATABASE_DESIGN.md` before integrating.
-- Work on separate feature branches; commit small, testable changes.
-- Do not commit secrets or `.env` files.
-- Open pull requests and request review before merging to `main`.
-- Each member owns implementation/testing of their assigned work; all members help with final integration.
+- **Shared repository:** https://github.com/Chandrabhanu-Prusty/CCL-Microproject
+- Agree on `API_CONTRACT.md` and `DATABASE_DESIGN.md` before merging backend changes.
+- Work on separate feature branches; commit small, testable, verifiable changes.
+- Never commit secrets, AWS Access Keys, or `.env` files.
+- Open pull requests with test evidence and request review before merging to `main`.
+- Each member owns implementation/testing of their assigned scope; all members participate in end-to-end integration.
 
-## Chandrabhanu — Frontend and integration
+---
+
+## 1. Chandrabhanu — Frontend Engineering, UI/UX & Integration
 
 **Branch:** `feature/frontend`
 
-Tasks:
-- Set up React + Vite and shared frontend structure.
-- Build event listing, search/filter, event details, and registration pages.
-- Build sign-in/register UI and connect to auth endpoints.
-- Build My Registrations and digital ticket display.
-- Generate QR code from the opaque ticket ID returned by the backend.
-- Build camera scanner UI and handle permission/error states.
-- Build manual attendee/ticket lookup UI.
-- Build organizer dashboard and statistics views.
-- Integrate API calls using `VITE_API_BASE_URL`.
-- Deploy to Vercel with HTTPS and test camera access on a real mobile browser.
+**Core Ownership:**
+- Redesign and implement the complete React + Vite application shell matching the dark graphite GDG-inspired design system (`#0D0E12`, `#14151B`, `#1B1D24`, `#F04F8B`, `#FF984F`).
+- Implement strict client-side Role-Based Access Control (RBAC):
+  - **Attendee Experience:** Event discovery, search/filter, event details, RSVP/waitlist, My RSVPs (`/my-registrations`), and digital QR ticket display (`/tickets/{ticketId}`). Strictly eliminate scanners, check-in links, and organizer dashboards from attendee views.
+  - **Organizer Experience:** Manage Events dashboard (`/organizer`), event creation/editing modal, attendee roster modal, live attendance analytics modal, and coordinator delegation modal (`eventStaffService`).
+  - **Coordinator Experience:** Dedicated venue check-in workspace (`/checkin`, `/checkin/{eventId}`), assigned events discovery (`GET /api/me/assigned-events`), WebRTC camera scanner, manual lookup fallback, and sound feedback chimes.
+- Implement isolated mock adapter (`mockData.js`) with 3 distinct test personas (`usr-attendee-demo`, `usr-organizer-01`, `usr-coordinator-01`).
+- Ensure robust HTTP API client (`apiClient.js`) adhering to `API_CONTRACT.md`, strictly disabling mock fallback when `VITE_API_BASE_URL` is set.
+- Maintain comprehensive unit tests (`npm test --prefix frontend`) and production builds (`npm run build --prefix frontend`).
+- Deploy frontend to Vercel over HTTPS and verify mobile camera permissions.
 
-**Deliverables:** working frontend, API integration, scanner/manual lookup, Vercel URL, screenshots.
+**Deliverables:** Production frontend SPA, UI design system (`DESIGN.md`), role-separated client navigation, test suite passing 18/18 checks, and Vercel deployment.
 
-## Neilsen — JWT authentication, API Gateway, Lambda event APIs
+---
+
+## 2. Neilsen — JWT Authentication, API Gateway & Event Management Handlers
 
 **Branch:** `feature/aws-auth-events`
 
-Tasks:
-- Set up shared backend conventions and Lambda entry point.
-- Implement register/login with bcrypt password hashing.
-- Implement signed JWT generation, verification middleware, and role checks.
-- Ensure new accounts default to `ATTENDEE`; never accept privileged roles from public registration.
-- Implement event list/details/create/update handlers with organizer authorization.
-- Configure API Gateway HTTP API and CORS.
-- Configure Lambda environment variables and the permitted execution role.
-- Coordinate request/response contracts with the frontend and Preeti.
-- Help deploy/test the API and document AWS resource names and endpoint base URL.
+**Core Ownership:**
+- Implement Lambda entry point (`backend/src/handlers/auth/`, `backend/src/handlers/events/`).
+- Build user registration and authentication handlers with bcrypt password hashing (10 rounds).
+- Enforce default `ATTENDEE` role on public signup; reject client-supplied elevated privileges.
+- Implement stateless HMAC SHA-256 JWT generation and verification middleware (`authMiddleware.js`).
+- Implement event CRUD handlers (`POST /api/events`, `PATCH /api/events/{eventId}`, `GET /api/events`).
+- Validate organizer event ownership (`event.organizerId === user.userId`) on all edit operations.
+- Implement coordinator assignment endpoints (`POST /api/events/{eventId}/staff`, `DELETE /api/events/{eventId}/staff/{userId}`, `GET /api/events/{eventId}/staff`).
+- Configure Amazon API Gateway HTTP API routes, stage variables, and CORS policies for the Vercel frontend.
+- Document environment variables: `JWT_SECRET`, `USERS_TABLE_NAME`, `EVENTS_TABLE_NAME`, `EVENT_STAFF_TABLE_NAME`.
 
-**Deliverables:** authentication, event APIs, API Gateway/Lambda configuration, shared API documentation.
+**Deliverables:** Authentication service, event management handlers, staff delegation APIs, API Gateway route mappings, and Postman authentication tests.
 
-## Preeti — DynamoDB, RSVP, waitlist, tickets, check-in
+---
+
+## 3. Preeti — DynamoDB Schema, Capacity Safe RSVP, Waitlist & Check-in
 
 **Branch:** `feature/rsvp-waitlist-checkin`
 
-Tasks:
-- Finalize DynamoDB keys and indexes with Neilsen.
-- Implement repositories for events, RSVPs, waitlist, and tickets.
-- Implement duplicate-registration prevention.
-- Implement capacity-safe RSVP with conditional writes/transactions.
-- Implement FIFO waitlist insertion and safe cancellation/promotion.
-- Implement ticket creation/activation and cancellation.
-- Implement ticket validation and conditional single-use check-in.
-- Implement attendee search and organizer statistics queries with the agreed contract.
-- Create Postman/API tests and record results.
+**Core Ownership:**
+- Provision and manage DynamoDB tables: `MarqueUsers`, `MarqueEvents`, `MarqueEventStaff`, `MarqueRSVPs`, `MarqueWaitlist`, `MarqueTickets`.
+- Implement `eventStaffRepository.js` and `GET /api/me/assigned-events` handler.
+- Build capacity-safe RSVP handler (`POST /api/events/{eventId}/rsvp`) utilizing `TransactWriteItems` with condition `confirmedCount < capacity`.
+- Build FIFO waitlist queue mechanism sorting by `ISO_TIMESTAMP#userId`.
+- Implement cancellation and atomic promotion flow (`DELETE /api/events/{eventId}/rsvp`):
+  - Query earliest waiting user via GSI `event-queue-index`.
+  - Atomically promote waitlisted user, activate ticket, and preserve capacity tally.
+- Implement event-scoped check-in handler (`POST /api/events/{eventId}/check-in`):
+  - Verify caller is event owner OR listed in `MarqueEventStaff`. Reject attendees with HTTP 403.
+  - Verify ticket is `ACTIVE` and belongs to `eventId`.
+  - Execute conditional update to `CHECKED_IN` preventing race conditions or duplicate check-in.
+- Implement attendee lookup (`GET /api/events/{eventId}/attendees`) and live analytics (`GET /api/events/{eventId}/stats`).
 
-**Deliverables:** DynamoDB design, RSVP/waitlist/check-in backend, tests, and test evidence.
+**Deliverables:** DynamoDB table definitions, transactional RSVP/waitlist service, single-use check-in handler, and concurrency test reports.
 
-## Dependencies
+---
 
-- Chandrabhanu needs the API contract and stable response shapes from Neilsen and Preeti.
-- Neilsen needs agreed DynamoDB access patterns from Preeti.
-- Preeti needs event and user ID conventions from Neilsen.
-- All three need the final route list before integration.
+## Handover & Integration Checklist
 
-## Handover checklist
-
-Include files changed, how to run/test, required environment variable names (never values), API routes implemented, known limitations, and screenshots/test output when useful.
+1. **API Alignment:** All endpoints match the specifications in `docs/API_CONTRACT.md`.
+2. **Database Alignment:** Table names, primary keys, and GSIs match `docs/DATABASE_DESIGN.md`.
+3. **Security Boundaries:** Strict enforcement of `docs/SECURITY.md` across both frontend guards and Lambda middleware.
+4. **Local Verification:**
+   - Frontend tests pass: `npm test --prefix frontend`
+   - Frontend builds cleanly: `npm run build --prefix frontend`
+5. **Configuration:** All environment variables documented without values (`.env.example`).

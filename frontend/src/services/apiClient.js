@@ -104,12 +104,22 @@ async function handleMockRequest(endpoint, options = {}) {
     }
     // Determine demo role from email or default to ATTENDEE
     let role = 'ATTENDEE';
-    if (email.includes('organizer')) role = 'ORGANIZER';
-    if (email.includes('coordinator')) role = 'COORDINATOR';
+    let userId = `usr-attendee-demo`;
+    let name = 'Chandrabhanu Prusty';
+
+    if (email.includes('organizer')) {
+      role = 'ORGANIZER';
+      userId = 'usr-organizer-01';
+      name = 'Neilsen Organizer';
+    } else if (email.includes('coordinator')) {
+      role = 'COORDINATOR';
+      userId = 'usr-coordinator-01';
+      name = 'Preeti Coordinator';
+    }
 
     const mockUser = {
-      userId: `usr-${Math.random().toString(36).substring(2, 9)}`,
-      name: email.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+      userId,
+      name,
       email,
       role,
     };
@@ -133,40 +143,71 @@ async function handleMockRequest(endpoint, options = {}) {
     };
   }
 
+  // Assigned events for coordinator
+  if (endpoint === '/api/me/assigned-events' && method === 'GET') {
+    return mockBackend.getAssignedEvents(user);
+  }
+
   // Events routes
-  if (endpoint.startsWith('/api/events') && method === 'GET') {
-    const parts = endpoint.split('?')[0].split('/');
-    // Check if it's /api/events/:eventId/attendees
-    if (parts.length === 5 && parts[4] === 'attendees') {
+  if (endpoint.startsWith('/api/events')) {
+    const cleanPath = endpoint.split('?')[0];
+    const parts = cleanPath.split('/');
+
+    // Event staff management: /api/events/:eventId/staff
+    if (parts.length === 5 && parts[4] === 'staff') {
+      const eventId = parts[3];
+      if (method === 'GET') {
+        return mockBackend.getEventStaff(eventId, user);
+      }
+      if (method === 'POST') {
+        return mockBackend.assignCoordinator(eventId, body.email, user);
+      }
+    }
+
+    // Remove coordinator: /api/events/:eventId/staff/:userId
+    if (parts.length === 6 && parts[4] === 'staff' && method === 'DELETE') {
+      const eventId = parts[3];
+      const targetUserId = parts[5];
+      return mockBackend.removeCoordinator(eventId, targetUserId, user);
+    }
+
+    // Attendees list: /api/events/:eventId/attendees
+    if (parts.length === 5 && parts[4] === 'attendees' && method === 'GET') {
       const eventId = parts[3];
       const urlParams = new URLSearchParams(endpoint.split('?')[1] || '');
-      return mockBackend.getAttendees(eventId, urlParams.get('q') || '');
+      return mockBackend.getAttendees(eventId, urlParams.get('q') || '', user);
     }
-    // Check if it's /api/events/:eventId/stats
-    if (parts.length === 5 && parts[4] === 'stats') {
+
+    // Event stats: /api/events/:eventId/stats
+    if (parts.length === 5 && parts[4] === 'stats' && method === 'GET') {
       const eventId = parts[3];
-      return mockBackend.getEventStats(eventId);
+      return mockBackend.getEventStats(eventId, user);
     }
-    // Single event /api/events/:eventId
+
+    // Single event: /api/events/:eventId
     if (parts.length === 4 && parts[3]) {
       const eventId = parts[3];
-      return mockBackend.getEventById(eventId);
+      if (method === 'GET') {
+        return mockBackend.getEventById(eventId);
+      }
+      if (method === 'PATCH') {
+        return mockBackend.updateEvent(eventId, body, user);
+      }
     }
-    // Event list
-    const urlParams = new URLSearchParams(endpoint.split('?')[1] || '');
-    return mockBackend.getEvents({
-      q: urlParams.get('q') || '',
-      category: urlParams.get('category') || '',
-    });
-  }
 
-  if (endpoint === '/api/events' && method === 'POST') {
-    return mockBackend.createEvent(body, user);
-  }
-
-  if (endpoint.startsWith('/api/events/') && method === 'PATCH') {
-    const eventId = endpoint.split('/')[3];
-    return mockBackend.updateEvent(eventId, body, user);
+    // Events list or creation
+    if (parts.length === 3) {
+      if (method === 'GET') {
+        const urlParams = new URLSearchParams(endpoint.split('?')[1] || '');
+        return mockBackend.getEvents({
+          q: urlParams.get('q') || '',
+          category: urlParams.get('category') || '',
+        });
+      }
+      if (method === 'POST') {
+        return mockBackend.createEvent(body, user);
+      }
+    }
   }
 
   // RSVP routes
@@ -187,15 +228,23 @@ async function handleMockRequest(endpoint, options = {}) {
   // Tickets
   if (endpoint.startsWith('/api/tickets/') && method === 'GET') {
     const ticketId = endpoint.split('/')[3];
-    return mockBackend.getTicketById(ticketId);
+    return mockBackend.getTicketById(ticketId, user);
   }
 
   // Check-in
   if (endpoint.match(/\/api\/events\/[^/]+\/check-in/) && method === 'POST') {
     const eventId = endpoint.split('/')[3];
-    return mockBackend.checkInTicket(eventId, body.ticketId, user?.userId);
+    return mockBackend.checkInTicket(eventId, body.ticketId, user);
   }
 
-  // Fallback
+  // Helper methods on apiClient
   throw { status: 404, code: 'NOT_FOUND', message: `Mock route not mapped: ${method} ${endpoint}` };
 }
+
+// Export shorthand HTTP helpers
+export default {
+  get: (url, options = {}) => apiRequest(url, { ...options, method: 'GET' }),
+  post: (url, body, options = {}) => apiRequest(url, { ...options, method: 'POST', body: JSON.stringify(body) }),
+  patch: (url, body, options = {}) => apiRequest(url, { ...options, method: 'PATCH', body: JSON.stringify(body) }),
+  delete: (url, options = {}) => apiRequest(url, { ...options, method: 'DELETE' }),
+};
