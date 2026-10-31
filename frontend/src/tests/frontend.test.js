@@ -55,11 +55,17 @@ describe('API Contract & Mock Backend Verification', () => {
   });
 
   test('Single-use check-in enforces ACTIVE ticket and blocks duplicate check-in', async () => {
-    // Check in Aarav Sharma (tkt-sample-coordinator-lookup)
+    const assignedCoord = {
+      userId: 'usr-coordinator-01',
+      name: 'Preeti Coordinator',
+      role: 'COORDINATOR',
+    };
+
+    // Check in Aarav Sharma (tkt-sample-coordinator-lookup) for evt-ccl-hackathon-2026
     const checkInRes = await mockBackend.checkInTicket(
       'evt-ccl-hackathon-2026',
       'tkt-sample-coordinator-lookup',
-      'coord-test'
+      assignedCoord
     );
     assert.equal(checkInRes.status, 'CHECKED_IN');
     assert.ok(checkInRes.checkedInAt);
@@ -70,7 +76,7 @@ describe('API Contract & Mock Backend Verification', () => {
         await mockBackend.checkInTicket(
           'evt-ccl-hackathon-2026',
           'tkt-sample-coordinator-lookup',
-          'coord-test'
+          assignedCoord
         );
       },
       (err) => {
@@ -86,6 +92,138 @@ describe('API Contract & Mock Backend Verification', () => {
     assert.equal(typeof res.ticket.ticketId, 'string');
     assert.ok(!res.ticket.ticketId.includes('Bearer'));
     assert.ok(!res.ticket.ticketId.includes('jwt'));
+  });
+});
+
+describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
+  const attendeeUser = {
+    userId: 'usr-attendee-demo',
+    email: 'chandrabhanu@example.com',
+    name: 'Chandrabhanu Prusty',
+    role: 'ATTENDEE',
+  };
+
+  const organizerOwner = {
+    userId: 'usr-organizer-01',
+    email: 'organizer.neilsen@example.com',
+    name: 'Neilsen Organizer',
+    role: 'ORGANIZER',
+  };
+
+  const organizerOther = {
+    userId: 'usr-organizer-02',
+    email: 'organizer.council@example.com',
+    name: 'Council Lead',
+    role: 'ORGANIZER',
+  };
+
+  const assignedCoordinator = {
+    userId: 'usr-coordinator-01',
+    email: 'coordinator.preeti@example.com',
+    name: 'Preeti Coordinator',
+    role: 'COORDINATOR',
+  };
+
+  const unassignedCoordinator = {
+    userId: 'usr-coordinator-02',
+    email: 'coordinator.samir@example.com',
+    name: 'Samir Coordinator',
+    role: 'COORDINATOR',
+  };
+
+  test('Attendee is strictly forbidden from checking in tickets', async () => {
+    await assert.rejects(
+      async () => {
+        await mockBackend.checkInTicket(
+          'evt-ccl-hackathon-2026',
+          'tkt-8f3a9e1b2c4d',
+          attendeeUser
+        );
+      },
+      (err) => {
+        return err.status === 403 && err.error?.code === 'FORBIDDEN';
+      }
+    );
+  });
+
+  test('Attendee is forbidden from viewing private attendee list', async () => {
+    await assert.rejects(
+      async () => {
+        await mockBackend.getAttendees('evt-ccl-hackathon-2026', '', attendeeUser);
+      },
+      (err) => {
+        return err.status === 403 && err.error?.code === 'FORBIDDEN';
+      }
+    );
+  });
+
+  test('Coordinator can only check in attendees for assigned events', async () => {
+    // Assigned to evt-ccl-hackathon-2026
+    const res = await mockBackend.checkInTicket(
+      'evt-ccl-hackathon-2026',
+      'tkt-8f3a9e1b2c4d',
+      assignedCoordinator
+    );
+    assert.equal(res.status, 'CHECKED_IN');
+  });
+
+  test('Unassigned coordinator is rejected from check-in on unassigned event', async () => {
+    // unassignedCoordinator is NOT assigned to evt-ccl-hackathon-2026
+    await assert.rejects(
+      async () => {
+        await mockBackend.checkInTicket(
+          'evt-ccl-hackathon-2026',
+          'tkt-8f3a9e1b2c4d',
+          unassignedCoordinator
+        );
+      },
+      (err) => {
+        return err.status === 403 && err.error?.code === 'FORBIDDEN';
+      }
+    );
+  });
+
+  test('Organizer can assign and revoke coordinator check-in staff', async () => {
+    // Assign Samir Coordinator to evt-ccl-hackathon-2026
+    const assignRes = await mockBackend.assignCoordinator(
+      'evt-ccl-hackathon-2026',
+      'coordinator.samir@example.com',
+      organizerOwner
+    );
+    assert.ok(assignRes.assignment);
+    assert.equal(assignRes.assignment.email, 'coordinator.samir@example.com');
+
+    // Verify staff list includes Samir
+    const staffRes = await mockBackend.getEventStaff('evt-ccl-hackathon-2026', organizerOwner);
+    assert.ok(staffRes.staff.some(s => s.email === 'coordinator.samir@example.com'));
+
+    // Revoke coordinator
+    const removeRes = await mockBackend.removeCoordinator(
+      'evt-ccl-hackathon-2026',
+      assignRes.assignment.userId,
+      organizerOwner
+    );
+    assert.ok(removeRes.message);
+
+    // Verify removed
+    const afterRes = await mockBackend.getEventStaff('evt-ccl-hackathon-2026', organizerOwner);
+    assert.ok(!afterRes.staff.some(s => s.userId === assignRes.assignment.userId));
+  });
+
+  test('Organizer cannot edit or assign staff to events owned by other organizers', async () => {
+    // organizerOther does not own evt-ccl-hackathon-2026
+    await assert.rejects(
+      async () => {
+        await mockBackend.assignCoordinator(
+          'evt-ccl-hackathon-2026',
+          'coordinator.preeti@example.com',
+          organizerOther
+        );
+      },
+      (err) => {
+        return err.status === 403 && err.error?.code === 'FORBIDDEN';
+      }
+    );
   });
 });
 
@@ -169,4 +307,3 @@ describe('Stakeholder Registration & Auth Guardrails', () => {
     delete process.env.VITE_USE_MOCK_API;
   });
 });
-

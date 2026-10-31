@@ -1,36 +1,39 @@
 # Security Notes
 
-## Authentication
-- Hash passwords using a suitable password-hashing library such as `bcryptjs`.
-- Never store or log plaintext passwords.
-- Sign JWTs with a strong secret configured outside source control.
-- Include a stable user ID, role, issued-at time, and expiry in the token.
-- Verify signature and expiry for every protected request.
-- Keep token lifetime limited and clear client-side token state on logout.
-- Never put JWTs in URLs or QR codes.
+## 1. Authentication & Token Security
+- **Bcrypt Password Hashing:** Passwords must be hashed using `bcryptjs` with a work factor of at least 10 rounds before DynamoDB persistence. Never store, log, or transmit plaintext credentials.
+- **Stateless JWTs:** Signed using HMAC SHA-256 (`HS256`) with a cryptographically random secret (`JWT_SECRET`) provided via AWS Lambda environment variables (never committed to Git).
+- **Token Claims:** Include immutable `userId`, `email`, and `role`. Tokens have a strict 24-hour expiration window.
+- **Client Storage:** Auth tokens and user descriptors are stored in browser localStorage. Logouts immediately execute `clearAuth()` to purge tokens.
+- **Explicit Mock Guard:** Client-side persona switching is restricted strictly to mock mode (`VITE_USE_MOCK_API=true`). When `VITE_API_BASE_URL` is configured, mock tokens are immediately invalidated and purged on boot.
 
-## Authorization
-- Enforce role checks in backend code.
-- New registrations default to `ATTENDEE`.
-- Do not trust `role`, `organizerId`, `checkedInBy`, or capacity values supplied by untrusted clients.
-- Check event ownership for organizer edit operations.
-- Restrict attendee search to authorized staff and a specific event.
+## 2. Role-Based Access Control (RBAC) & Event-Scoped Permissions
 
-## AWS permissions
-- Lambda must use an AWS execution role to access DynamoDB, S3, and logs.
-- Grant least privilege to required tables, indexes, and bucket paths.
-- Do not use personal AWS credentials in browser code or commit them to GitHub.
-- Keep S3 Block Public Access enabled; use short-lived presigned URLs for uploads if implemented.
+```
++---------------+------------------------+------------------------------------+
+| Role          | Frontend Boundary      | Backend Enforcement Boundary       |
++---------------+------------------------+------------------------------------+
+| ATTENDEE      | Discover, RSVP, Pass   | Reject check-in, staff, & org APIs |
+| ORGANIZER     | Events Studio, Staff   | Validate event ownership           |
+| COORDINATOR   | Assigned Events Only   | Validate MarqueEventStaff record   |
++---------------+------------------------+------------------------------------+
+```
 
-## QR tickets
-- QR contains an opaque ticket identifier only.
-- A QR code is not proof by itself; the backend must validate its record and status.
-- Check-in must be an atomic conditional update so two simultaneous scans cannot both succeed.
-- Cancelled and waitlisted registrations must not be accepted as valid tickets.
-- Manual lookup must invoke the same backend validation logic as scanning.
+- **Default Registration Privilege:** Public user self-registration (`POST /api/auth/register`) strictly assigns `role: 'ATTENDEE'`. Any client-supplied `role` parameter is silently stripped or rejected.
+- **Untrusted Client Inputs:** Never trust client-supplied `role`, `organizerId`, `checkedInBy`, or `capacity` values. The backend always derives user identity and role from the cryptographically verified JWT payload.
+- **Event Ownership Enforcement:** For `PATCH /api/events/{eventId}` and `POST /api/events/{eventId}/staff`, the backend checks `event.organizerId === token.userId`. Organizers cannot modify events or assign staff to events owned by other organizers.
+- **Event-Scoped Coordinator Delegation:** Coordinators receive check-in permissions **only** for events where their `userId` exists in `MarqueEventStaff`. A coordinator assigned to Hackathon A cannot scan tickets or view attendee lists for DevFest B.
+- **Strict Attendee Isolation:** Attendees attempting to call `/api/events/{eventId}/check-in`, `/api/events/{eventId}/staff`, or `/api/events/{eventId}/attendees` receive HTTP 403 Forbidden.
 
-## Data handling
-- Return only the minimum attendee information needed for a workflow.
-- Do not log JWTs, passwords, or sensitive request bodies.
-- Validate and limit uploaded image type and size.
-- Use HTTPS for the deployed frontend and API.
+## 3. QR Ticket Architecture & Tamper Resistance
+- **Opaque Identifiers Only:** The QR ticket contains strictly an opaque reference ID (`tkt-xxxxxxxx`).
+- **No Embedded Credentials:** QR codes **never** contain JWTs, user emails, attendee names, passwords, or check-in tokens. If an attendee screenshots their QR pass, no sensitive credentials or elevated tokens are exposed.
+- **Single-Use Enforcement:** DynamoDB conditional updates (`#status = :active`) guarantee that duplicate scans or concurrent scan attempts from multiple check-in lanes are atomically rejected with HTTP 409 Conflict (`ALREADY_CHECKED_IN`).
+- **Status Gating:** Tickets in `CANCELLED`, `WAITLISTED`, or `PENDING` states cannot be checked in.
+- **Auditing:** Successful check-ins record the exact UTC timestamp (`checkedInAt`) and identity of the staff member (`checkedInBy`).
+
+## 4. AWS Infrastructure & Least Privilege
+- **IAM Execution Roles:** The Lambda backend operates under a dedicated AWS IAM role with least-privilege policies restricted strictly to the six Marque DynamoDB tables, the event-banner S3 bucket, and CloudWatch Logs.
+- **Zero Hardcoded Secrets:** No AWS Access Keys, Secret Keys, or API keys are bundled into frontend assets or source repositories.
+- **S3 Security Posture:** The S3 bucket maintains Block Public Access enabled. Uploads are negotiated via short-lived presigned PUT URLs generated by authorized organizer handlers.
+- **Transport Security:** All traffic is strictly encrypted in transit using TLS 1.3 / HTTPS across both the Vercel-hosted frontend and Amazon API Gateway HTTP API.

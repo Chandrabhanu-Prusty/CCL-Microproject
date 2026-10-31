@@ -41,6 +41,7 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
       <nav className="sidebar-nav">
         <span className="sidebar-section-title">Navigation</span>
 
+        {/* Available to all authenticated users */}
         <NavLink 
           to="/events" 
           onClick={onClose}
@@ -59,35 +60,36 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
           <span>My RSVPs</span>
         </NavLink>
 
-        <span className="sidebar-section-title" style={{ marginTop: '0.5rem' }}>Management</span>
+        {/* Management & Staff Navigation - ONLY visible to authorized roles, NEVER attendees */}
+        {(isOrganizer || isCoordinator) && (
+          <>
+            <span className="sidebar-section-title" style={{ marginTop: '0.5rem' }}>Management</span>
 
-        <NavLink 
-          to="/organizer" 
-          onClick={onClose}
-          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-        >
-          <Layers size={17} />
-          <span>Manage Events</span>
-          {!isOrganizer && (
-            <span style={{ marginLeft: 'auto', fontSize: '0.625rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-              Org
-            </span>
-          )}
-        </NavLink>
+            {/* Organizer Only: Manage Events */}
+            {isOrganizer && (
+              <NavLink 
+                to="/organizer" 
+                onClick={onClose}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+              >
+                <Layers size={17} />
+                <span>Manage Events</span>
+              </NavLink>
+            )}
 
-        <NavLink 
-          to="/checkin" 
-          onClick={onClose}
-          className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
-        >
-          <QrCode size={17} />
-          <span>Check-in</span>
-          {!isCoordinator && (
-            <span style={{ marginLeft: 'auto', fontSize: '0.625rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>
-              Staff
-            </span>
-          )}
-        </NavLink>
+            {/* Coordinator & Organizer: Check-in Workspace */}
+            {(isCoordinator || isOrganizer) && (
+              <NavLink 
+                to="/checkin" 
+                onClick={onClose}
+                className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}
+              >
+                <QrCode size={17} />
+                <span>Check-in Workspace</span>
+              </NavLink>
+            )}
+          </>
+        )}
 
         <div className="sidebar-divider" />
 
@@ -131,7 +133,7 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
               </button>
             </div>
 
-            {/* Quick Demo Role Switcher (Mock Mode ONLY for testing & grading) */}
+            {/* Quick Demo Persona Switcher (Mock Mode ONLY for testing & grading) */}
             {isMockMode && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', background: 'var(--bg-main)', padding: '0.45rem 0.6rem', borderRadius: 'var(--radius-xs)', border: '1px solid var(--border-subtle)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.6875rem', fontWeight: 700, color: 'var(--accent-orange)', textTransform: 'uppercase' }}>
@@ -152,9 +154,9 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
                     outline: 'none',
                   }}
                 >
-                  <option value="ATTENDEE" style={{ background: '#1B1D24', color: '#fff' }}>Attendee</option>
-                  <option value="ORGANIZER" style={{ background: '#1B1D24', color: '#fff' }}>Organizer</option>
-                  <option value="COORDINATOR" style={{ background: '#1B1D24', color: '#fff' }}>Coordinator</option>
+                  <option value="ATTENDEE" style={{ background: '#1B1D24', color: '#fff' }}>Attendee (Chandrabhanu)</option>
+                  <option value="ORGANIZER" style={{ background: '#1B1D24', color: '#fff' }}>Organizer (Neilsen)</option>
+                  <option value="COORDINATOR" style={{ background: '#1B1D24', color: '#fff' }}>Coordinator (Preeti)</option>
                 </select>
               </div>
             )}
@@ -194,4 +196,3 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
     </>
   );
 }
-

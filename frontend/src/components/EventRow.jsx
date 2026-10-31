@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Calendar, MapPin, Users, ArrowRight, Eye, Edit3, BarChart3, Clock, CheckCircle } from 'lucide-react';
+import { Calendar, MapPin, Users, ArrowRight, Eye, Edit3, BarChart3, Clock, CheckCircle, UserCheck } from 'lucide-react';
 import CapacityBar from './CapacityBar';
 import StatusBadge from './StatusBadge';
 
@@ -9,7 +9,8 @@ export default function EventRow({
   variant = 'attendee', // 'attendee' | 'organizer'
   onEdit, 
   onViewStats, 
-  onViewAttendees 
+  onViewAttendees,
+  onManageStaff
 }) {
   if (!event) return null;
 
@@ -91,7 +92,7 @@ export default function EventRow({
               </Link>
             </>
           ) : (
-            /* Organizer Actions: Edit, View Event, Attendees, Analytics */
+            /* Organizer Actions: Edit, View Event, Attendees, Analytics, Coordinators */
             <>
               <button 
                 onClick={() => onEdit && onEdit(event)}
@@ -103,12 +104,12 @@ export default function EventRow({
               </button>
 
               <Link 
-                to={`/events/${event.eventId}`}
+                to={`/events/${event.eventId}`} 
                 className="btn btn-sm btn-outline"
                 title="View Public Page"
               >
                 <Eye size={13} />
-                <span>View Event</span>
+                <span>View</span>
               </Link>
 
               <button 
@@ -118,6 +119,15 @@ export default function EventRow({
               >
                 <Users size={13} />
                 <span>Attendees</span>
+              </button>
+
+              <button 
+                onClick={() => onManageStaff && onManageStaff(event)}
+                className="btn btn-sm btn-secondary"
+                title="Assign / Manage Coordinators"
+              >
+                <UserCheck size={13} />
+                <span>Staff</span>
               </button>
 
               <button 
@@ -147,4 +157,3 @@ export default function EventRow({
     </article>
   );
 }
-

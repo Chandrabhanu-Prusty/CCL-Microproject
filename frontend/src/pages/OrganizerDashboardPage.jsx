@@ -13,11 +13,15 @@ import {
   Sparkles,
   CheckCircle2,
   TrendingUp,
-  UserCheck
+  UserCheck,
+  UserMinus,
+  UserPlus,
+  Mail
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import * as eventService from '../services/eventService';
 import * as checkinService from '../services/checkinService';
+import * as eventStaffService from '../services/eventStaffService';
 import EventRow from '../components/EventRow';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
@@ -45,6 +49,15 @@ export default function OrganizerDashboardPage() {
   const [attendeesList, setAttendeesList] = useState([]);
   const [attendeesLoading, setAttendeesLoading] = useState(false);
 
+  // Staff / Coordinator modal state
+  const [staffModalEvent, setStaffModalEvent] = useState(null);
+  const [staffList, setStaffList] = useState([]);
+  const [staffLoading, setStaffLoading] = useState(false);
+  const [coordinatorEmailInput, setCoordinatorEmailInput] = useState('');
+  const [staffAssigning, setStaffAssigning] = useState(false);
+  const [staffError, setStaffError] = useState(null);
+  const [staffSuccess, setStaffSuccess] = useState(null);
+
   // Form state (matching API_CONTRACT.md)
   const [formData, setFormData] = useState({
     title: '',
@@ -64,7 +77,12 @@ export default function OrganizerDashboardPage() {
       setLoading(true);
       setError(null);
       const res = await eventService.getEvents();
-      setEvents(res.events || []);
+      // Show events owned by the user (or all if in general mock view)
+      const allEvents = res.events || [];
+      const owned = user?.userId 
+        ? allEvents.filter(e => e.organizerId === user.userId || !e.organizerId)
+        : allEvents;
+      setEvents(owned.length > 0 ? owned : allEvents);
     } catch (err) {
       console.error('Failed to load organizer events:', err);
       setError(err.message || 'Unable to retrieve events from backend.');
@@ -75,7 +93,7 @@ export default function OrganizerDashboardPage() {
 
   useEffect(() => {
     fetchOrganizerEvents();
-  }, []);
+  }, [user?.userId]);
 
   // Listen for "+ New Event" event from top header
   useEffect(() => {
@@ -179,6 +197,57 @@ export default function OrganizerDashboardPage() {
     }
   };
 
+  // Staff / Coordinator Management
+  const manageStaff = async (event) => {
+    setStaffModalEvent(event);
+    setStaffError(null);
+    setStaffSuccess(null);
+    setCoordinatorEmailInput('');
+    setStaffLoading(true);
+    try {
+      const res = await eventStaffService.getEventStaff(event.eventId);
+      setStaffList(res.staff || []);
+    } catch (err) {
+      console.error('Failed to load event staff:', err);
+      setStaffError(err.message || 'Failed to load assigned coordinators.');
+    } finally {
+      setStaffLoading(false);
+    }
+  };
+
+  const handleAssignCoordinator = async (e) => {
+    e.preventDefault();
+    if (!coordinatorEmailInput.trim() || !staffModalEvent) return;
+    setStaffAssigning(true);
+    setStaffError(null);
+    setStaffSuccess(null);
+    try {
+      await eventStaffService.assignCoordinator(staffModalEvent.eventId, coordinatorEmailInput.trim());
+      setStaffSuccess(`Coordinator assigned successfully.`);
+      setCoordinatorEmailInput('');
+      const res = await eventStaffService.getEventStaff(staffModalEvent.eventId);
+      setStaffList(res.staff || []);
+    } catch (err) {
+      setStaffError(err.message || 'Failed to assign coordinator.');
+    } finally {
+      setStaffAssigning(false);
+    }
+  };
+
+  const handleRemoveCoordinator = async (userId) => {
+    if (!staffModalEvent) return;
+    setStaffError(null);
+    setStaffSuccess(null);
+    try {
+      await eventStaffService.removeCoordinator(staffModalEvent.eventId, userId);
+      setStaffSuccess('Coordinator access revoked.');
+      const res = await eventStaffService.getEventStaff(staffModalEvent.eventId);
+      setStaffList(res.staff || []);
+    } catch (err) {
+      setStaffError(err.message || 'Failed to remove coordinator.');
+    }
+  };
+
   const filteredEvents = events.filter((e) => {
     const matchesQuery = !searchQuery || 
       e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -210,7 +279,7 @@ export default function OrganizerDashboardPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', fontSize: '0.875rem' }}>
             <ShieldAlert size={18} style={{ flexShrink: 0 }} />
             <span>
-              You are signed in as <strong>{user?.role || 'Attendee'}</strong>. Event creation and editing requires the <strong>ORGANIZER</strong> role.
+              You are signed in as <strong>{user?.role || 'Attendee'}</strong>. Event creation, editing and staff assignment requires the <strong>ORGANIZER</strong> role.
             </span>
           </div>
           {isMockMode && (
@@ -273,7 +342,7 @@ export default function OrganizerDashboardPage() {
         ) : filteredEvents.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: '3.5rem 1.5rem' }}>
             <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9375rem' }}>
-              {searchQuery ? 'No events found matching your search.' : 'No events published yet.'}
+              {searchQuery ? 'No events found matching your search.' : 'No events owned yet.'}
             </p>
             <button onClick={openCreateModal} className="btn btn-primary">
               <Plus size={16} />
@@ -290,6 +359,7 @@ export default function OrganizerDashboardPage() {
                 onEdit={openEditModal}
                 onViewStats={viewStats}
                 onViewAttendees={viewAttendees}
+                onManageStaff={manageStaff}
               />
             ))}
           </div>
@@ -565,6 +635,111 @@ export default function OrganizerDashboardPage() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Staff / Coordinator Assignment Modal */}
+      {staffModalEvent && (
+        <div className="modal-overlay" onClick={() => setStaffModalEvent(null)} role="dialog" aria-modal="true" aria-labelledby="staff-modal-title">
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+              <div>
+                <span style={{ fontSize: '0.6875rem', color: 'var(--accent-pink)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>
+                  Event Check-in Staff
+                </span>
+                <h3 id="staff-modal-title" style={{ fontSize: '1.15rem', marginTop: '0.15rem' }}>
+                  Assign Coordinators
+                </h3>
+              </div>
+              <button onClick={() => setStaffModalEvent(null)} aria-label="Close staff modal" style={{ color: 'var(--text-muted)' }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <p style={{ color: 'var(--text-secondary)', fontSize: '0.8125rem', marginBottom: '1rem' }}>
+              Coordinators assigned here receive permission to scan QR codes and perform check-ins <strong>only for {staffModalEvent.title}</strong>.
+            </p>
+
+            {staffError && (
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'var(--status-error-bg)', border: '1px solid var(--status-error-border)', borderRadius: 'var(--radius-sm)', color: 'var(--status-error)', fontSize: '0.8125rem' }}>
+                {staffError}
+              </div>
+            )}
+
+            {staffSuccess && (
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'var(--status-success-bg)', border: '1px solid var(--status-success-border)', borderRadius: 'var(--radius-sm)', color: 'var(--status-success)', fontSize: '0.8125rem' }}>
+                {staffSuccess}
+              </div>
+            )}
+
+            {/* Add Coordinator Form */}
+            <form onSubmit={handleAssignCoordinator} style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.25rem' }}>
+              <div style={{ position: 'relative', flex: 1 }}>
+                <Mail size={15} style={{ position: 'absolute', left: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+                <input
+                  type="email"
+                  placeholder="coordinator.email@example.com"
+                  value={coordinatorEmailInput}
+                  onChange={(e) => setCoordinatorEmailInput(e.target.value)}
+                  className="form-input"
+                  style={{ paddingLeft: '2.4rem' }}
+                  required
+                />
+              </div>
+              <button type="submit" disabled={staffAssigning} className="btn btn-primary" style={{ flexShrink: 0 }}>
+                <UserPlus size={15} />
+                <span>{staffAssigning ? 'Assigning...' : 'Assign Staff'}</span>
+              </button>
+            </form>
+
+            {/* Current Staff List */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>
+                Assigned Coordinators ({staffList.length})
+              </span>
+
+              {staffLoading ? (
+                <LoadingSpinner message="Loading assigned coordinators..." />
+              ) : staffList.length === 0 ? (
+                <div style={{ padding: '1.5rem', background: '#14151B', borderRadius: 'var(--radius-sm)', textAlign: 'center', border: '1px dashed var(--border-subtle)' }}>
+                  <p style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                    No coordinators assigned yet. Enter a coordinator's campus email above to grant check-in access.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '250px', overflowY: 'auto' }}>
+                  {staffList.map((staff) => (
+                    <div 
+                      key={staff.userId}
+                      style={{ 
+                        display: 'flex', 
+                        justifyContent: 'space-between', 
+                        alignItems: 'center', 
+                        padding: '0.65rem 0.85rem', 
+                        background: '#14151B', 
+                        borderRadius: 'var(--radius-sm)', 
+                        border: '1px solid var(--border-subtle)' 
+                      }}
+                    >
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{staff.name || 'Coordinator'}</div>
+                        <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{staff.email}</div>
+                      </div>
+                      <button
+                        onClick={() => handleRemoveCoordinator(staff.userId)}
+                        className="btn btn-sm btn-ghost"
+                        style={{ color: 'var(--status-error)' }}
+                        title="Revoke coordinator check-in access"
+                      >
+                        <UserMinus size={14} />
+                        <span>Revoke</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}

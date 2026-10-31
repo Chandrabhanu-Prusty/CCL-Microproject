@@ -11,6 +11,28 @@ import { isMockMode } from '../services/apiClient';
 
 const AuthContext = createContext(null);
 
+// Canonical demo personas for mock testing
+const DEMO_PERSONAS = {
+  ATTENDEE: {
+    userId: 'usr-attendee-demo',
+    email: 'chandrabhanu@example.com',
+    name: 'Chandrabhanu Prusty',
+    role: 'ATTENDEE',
+  },
+  ORGANIZER: {
+    userId: 'usr-organizer-01',
+    email: 'organizer.neilsen@example.com',
+    name: 'Neilsen Organizer',
+    role: 'ORGANIZER',
+  },
+  COORDINATOR: {
+    userId: 'usr-coordinator-01',
+    email: 'coordinator.preeti@example.com',
+    name: 'Preeti Coordinator',
+    role: 'COORDINATOR',
+  },
+};
+
 export function AuthProvider({ children }) {
   const [user, setCurrentUser] = useState(null);
   const [token, setCurrentToken] = useState(null);
@@ -77,19 +99,29 @@ export function AuthProvider({ children }) {
       );
       return;
     }
-    if (!user) return;
-    const updatedUser = { ...user, role: newRole };
-    setUser(updatedUser);
-    setCurrentUser(updatedUser);
+    const persona = DEMO_PERSONAS[newRole] || {
+      userId: `usr-${Date.now().toString(36)}`,
+      email: `${newRole.toLowerCase()}@example.com`,
+      name: `${newRole} User`,
+      role: newRole,
+    };
+    setUser(persona);
+    setCurrentUser(persona);
   };
+
+  const role = user?.role || 'ATTENDEE';
+  const isOrganizer = role === 'ORGANIZER';
+  const isCoordinator = role === 'COORDINATOR';
+  const isAttendee = role === 'ATTENDEE';
 
   const value = {
     user,
     token,
     isAuthenticated: Boolean(token && user),
-    role: user?.role || 'ATTENDEE',
-    isOrganizer: user?.role === 'ORGANIZER',
-    isCoordinator: user?.role === 'COORDINATOR' || user?.role === 'ORGANIZER', // Organizers can also check in
+    role,
+    isOrganizer,
+    isCoordinator,
+    isAttendee,
     isMockMode,
     loading,
     login,
