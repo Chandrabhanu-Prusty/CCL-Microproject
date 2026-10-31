@@ -1,6 +1,6 @@
 # Postman Setup & API Testing Guide
 
-This guide explains how to import `docs/openapi.yaml` into Postman, configure test environments, manage JWT bearer tokens across different stakeholder personas, and test both happy paths and error scenarios (401, 403, 409).
+This guide explains how to import `docs/openapi.yaml` into Postman, configure test environments, manage JWT bearer tokens across different stakeholder personas, dynamically capture resource IDs, and test both happy paths and error scenarios (401, 403, 409).
 
 ---
 
@@ -29,12 +29,16 @@ To test against local mock, serverless offline, or the deployed AWS API Gateway 
 
 | Variable Name | Initial Value | Current Value | Description |
 | :--- | :--- | :--- | :--- |
-| `baseUrl` | `https://api.marque.campus.edu` | (Your API Gateway URL or `http://localhost:3000`) | Base API URL |
+| `baseUrl` | `https://{{apiGatewayId}}.execute-api.{{region}}.amazonaws.com/prod` | (Your API Gateway URL or `http://localhost:3000`) | Base API URL |
+| `apiGatewayId` | `your-api-id` | `your-api-id` | AWS API Gateway HTTP API identifier |
+| `region` | `ap-south-1` | `ap-south-1` | Target AWS deployment region |
+| `currentAuthToken` | (leave empty initially) | (active Bearer JWT for request execution) | Currently active token |
+| `loginPersona` | `ATTENDEE` | `ATTENDEE` | Active persona label (`ATTENDEE`, `ORGANIZER`, `COORDINATOR`) |
 | `attendeeToken` | (leave empty initially) | (populated after attendee login) | JWT for Attendee persona |
 | `organizerToken` | (leave empty initially) | (populated after organizer login) | JWT for Organizer persona |
 | `coordinatorToken` | (leave empty initially) | (populated after staff login) | JWT for Coordinator persona |
-| `eventId` | `evt-ccl-hackathon-2026` | `evt-ccl-hackathon-2026` | Test Event ID |
-| `testTicketId` | `tkt-8f3a9e1b2c4d` | `tkt-8f3a9e1b2c4d` | Test Ticket ID |
+| `eventId` | `evt-ccl-hackathon-2026` | `evt-ccl-hackathon-2026` | Test Event ID (auto-captured on create) |
+| `ticketId` | `tkt-8f3a9e1b2c4d` | `tkt-8f3a9e1b2c4d` | Test Ticket ID (auto-captured on RSVP) |
 | `coordinatorUserId` | (leave empty initially) | (populated from staff assign) | Coordinator User ID |
 
 4. Click **Save** (`Ctrl + S`), and ensure the environment is selected in the top-right environment dropdown.
@@ -55,67 +59,122 @@ The OpenAPI specification defines the `BearerAuth` security scheme (`Authorizati
    ```
 5. Click **Save**. All requests set to "Inherit auth from parent" will now use this active token.
 
-### Method B: Automated Token Capture via Login Tests
-In the **`POST /api/auth/login`** request, navigate to the **Tests** tab and add the following script:
+### Method B: Automated Token & Variable Capture via Test Scripts
 
+#### 1. In `POST /api/auth/login` (Tests Tab):
 ```javascript
-// Automatically extract token and user role after successful login
 if (pm.response.code === 200) {
     const data = pm.response.json();
     pm.environment.set("currentAuthToken", data.token);
 
     if (data.user.role === "ORGANIZER") {
         pm.environment.set("organizerToken", data.token);
+        pm.environment.set("loginPersona", "ORGANIZER");
         console.log("Captured Organizer Token for: " + data.user.email);
     } else {
         pm.environment.set("attendeeToken", data.token);
+        pm.environment.set("loginPersona", "ATTENDEE");
         console.log("Captured Attendee Token for: " + data.user.email);
     }
 }
 ```
 
+#### 2. In `POST /api/events` (Create Event - Tests Tab):
+```javascript
+if (pm.response.code === 201) {
+    const data = pm.response.json();
+    const createdEventId = data.event ? data.event.eventId : data.eventId;
+    pm.environment.set("eventId", createdEventId);
+    console.log("Dynamically captured eventId: " + createdEventId);
+}
+```
+
+#### 3. In `POST /api/events/{{eventId}}/rsvp` (Register RSVP - Tests Tab):
+```javascript
+if (pm.response.code === 201 && pm.response.json().ticketId) {
+    const ticketId = pm.response.json().ticketId;
+    pm.environment.set("ticketId", ticketId);
+    console.log("Dynamically captured ticketId: " + ticketId);
+}
+```
+
+#### 4. In `POST /api/events/{{eventId}}/staff` (Assign Staff - Tests Tab):
+```javascript
+if (pm.response.code === 201) {
+    const staffUserId = pm.response.json().assignment.userId;
+    pm.environment.set("coordinatorUserId", staffUserId);
+    console.log("Dynamically captured coordinatorUserId: " + staffUserId);
+}
+```
+
 ---
 
-## 4. Testing Happy Paths (Step-by-Step Persona Flows)
+## 4. Account Provisioning Rules for Testing
+
+### Controlled Organizer Provisioning
+Public registration (`POST /api/auth/register`) strictly assigns `role: "ATTENDEE"`. To test organizer flows:
+1. Register a user via `POST /api/auth/register` (e.g., `organizer@vesit.edu`).
+2. Run the admin provisioning script or update DynamoDB:
+   ```bash
+   aws dynamodb update-item \
+     --table-name MarqueUsers \
+     --key '{"userId":{"S":"usr-xxx"},"itemType":{"S":"PROFILE"}}' \
+     --update-expression "SET #r = :org" \
+     --expression-attribute-names '{"#r":"role"}' \
+     --expression-attribute-values '{":org":{"S":"ORGANIZER"}}'
+   ```
+3. Login via `POST /api/auth/login` to obtain the organizer JWT.
+
+### Pre-Registration for Check-in Coordinators
+Assigning staff (`POST /api/events/{{eventId}}/staff`) requires the target user account to already exist in `MarqueUsers`:
+1. Register the coordinator account first via `POST /api/auth/register` (e.g. `preeti.coord@example.com`). Note: their account role remains `ATTENDEE`.
+2. The event organizer assigns them using their registered email.
+3. The coordinator logs in via `POST /api/auth/login`. Their token is saved as `coordinatorToken` / `currentAuthToken`. They can now access check-in endpoints for this event without any global role elevation.
+
+---
+
+## 5. Testing Happy Paths (Step-by-Step Persona Flows)
 
 ### Flow 1: Attendee Discovery & Free RSVP
 1. **List Events:** Execute `GET {{baseUrl}}/api/events`. Verify `200 OK` and inspect event list.
 2. **Attendee Sign-in:** Execute `POST {{baseUrl}}/api/auth/login` with attendee credentials.
 3. **Register RSVP:** Execute `POST {{baseUrl}}/api/events/{{eventId}}/rsvp`.
    - Set Header: `Authorization: Bearer {{attendeeToken}}`.
-   - Verify `201 Created` with status `CONFIRMED` and capture returned `ticketId`.
-4. **Inspect Personal Digital Pass:** Execute `GET {{baseUrl}}/api/tickets/{{testTicketId}}`.
+   - Verify `201 Created` with status `CONFIRMED` and verify returned `ticketId` is captured in environment.
+4. **Inspect Personal Digital Pass:** Execute `GET {{baseUrl}}/api/tickets/{{ticketId}}`.
    - Verify `200 OK` and confirm status is `ACTIVE`.
 
 ### Flow 2: Organizer Studio & Coordinator Delegation
 1. **Organizer Sign-in:** Execute `POST {{baseUrl}}/api/auth/login` with organizer credentials.
 2. **Create Event:** Execute `POST {{baseUrl}}/api/events` with Header `Authorization: Bearer {{organizerToken}}`.
-   - Verify `201 Created` and capture returned `eventId`.
+   - Verify `201 Created`, response envelope `{ "event": { ... } }`, and verify `eventId` is captured.
 3. **Assign Coordinator:** Execute `POST {{baseUrl}}/api/events/{{eventId}}/staff` with payload:
    ```json
    {
-     "email": "coordinator.preeti@example.com"
+     "email": "preeti.coord@example.com"
    }
    ```
-   - Verify `201 Created` with `permission: "CHECK_IN"`.
+   - Verify `201 Created` with `permission: "CHECK_IN"`, and verify `coordinatorUserId` is captured.
 
 ### Flow 3: Coordinator Venue Check-in
-1. **Coordinator Sign-in:** Login as `coordinator.preeti@example.com`.
+1. **Coordinator Sign-in:** Login as `preeti.coord@example.com`. Set `currentAuthToken = {{coordinatorToken}}`.
 2. **List Assigned Events:** Execute `GET {{baseUrl}}/api/me/assigned-events`.
    - Verify `200 OK` and check that the assigned event appears in the list.
 3. **Attendee Search:** Execute `GET {{baseUrl}}/api/events/{{eventId}}/attendees?q=chandrabhanu`.
-   - Verify `200 OK` and note the masked email and active ticket ID.
+   - Verify `200 OK` and note the masked email (`ch***@example.com`) and active ticket ID.
 4. **Execute Check-in:** Execute `POST {{baseUrl}}/api/events/{{eventId}}/check-in` with payload:
    ```json
    {
-     "ticketId": "{{testTicketId}}"
+     "ticketId": "{{ticketId}}"
    }
    ```
    - Verify `200 OK` with status `CHECKED_IN`, timestamp, and staff name.
+5. **Check-in Summary:** Execute `GET {{baseUrl}}/api/events/{{eventId}}/checkin-summary`.
+   - Verify `200 OK` with updated `checkedInCount`.
 
 ---
 
-## 5. Testing Error Conditions (401, 403, 409)
+## 6. Testing Error Conditions (401, 403, 409)
 
 ### Testing 401 Unauthorized
 1. Open `POST /api/events` or `GET /api/me/rsvps`.
@@ -140,10 +199,13 @@ if (pm.response.code === 200) {
 2. **Attendee Attempting Check-in:**
    - Send `POST /api/events/{{eventId}}/check-in` using `Authorization: Bearer {{attendeeToken}}`.
    - **Expected Result:** Status `403 Forbidden` (`FORBIDDEN`).
-3. **Cross-Organizer Tampering:**
+3. **Organizer Scanning Without Staff Assignment:**
+   - Send `POST /api/events/{{eventId}}/check-in` using `Authorization: Bearer {{organizerToken}}` when the organizer has not explicitly assigned themselves in `MarqueEventStaff`.
+   - **Expected Result:** Status `403 Forbidden` (`FORBIDDEN`).
+4. **Cross-Organizer Tampering:**
    - Organizer B attempts `PATCH /api/events/{{eventId}}` on an event owned by Organizer A.
    - **Expected Result:** Status `403 Forbidden` (`FORBIDDEN`).
-4. **Unassigned Coordinator Check-in:**
+5. **Unassigned Coordinator Check-in:**
    - Coordinator attempts check-in on an event where they have no record in `MarqueEventStaff`.
    - **Expected Result:** Status `403 Forbidden` (`FORBIDDEN`).
 
@@ -160,7 +222,7 @@ if (pm.response.code === 200) {
 
 ---
 
-## 6. Organizing & Saving Request Presets
+## 7. Organizing & Saving Request Presets
 
 1. Create test folders inside Postman:
    - `01. Authentication`
@@ -169,4 +231,3 @@ if (pm.response.code === 200) {
    - `04. Coordinator Check-in Gate`
    - `05. Security & Edge Case Tests (401/403/409)`
 2. Use the **Postman Collection Runner** to execute the entire test sequence sequentially and verify that all assertions pass automatically.
-

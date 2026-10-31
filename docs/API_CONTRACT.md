@@ -9,9 +9,9 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **Encoding & Data Format:** UTF-8 JSON request and response payloads.
 - **Stateless Authentication:** Bearer JWT in `Authorization` header: `Authorization: Bearer <token>`.
 - **Global Roles:** Strictly `ATTENDEE` and `ORGANIZER`. `COORDINATOR` is never a global role or JWT claim.
-- **Event Check-in Authorization:** Validated on every staff request against `MarqueEventStaff` table.
+- **Event Check-in Authorization:** Validated on every staff request against `MarqueEventStaff` table. Organizers must explicitly assign themselves as staff if they wish to perform venue check-ins.
 - **Timestamps:** ISO 8601 UTC formatted strings (e.g., `2026-11-15T09:00:00.000Z`).
-- **Standard Success Format:** Direct entity return or standard envelopes: `{ "events": [...] }`, `{ "ticket": {...} }`.
+- **Standard Success Format:** Standard envelope responses: `{ "events": [...] }`, `{ "event": {...} }`, `{ "ticket": {...} }`, `{ "rsvps": [...] }`.
 - **Standard Error Format:**
   ```json
   {
@@ -184,7 +184,26 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
   - `category`: Must be one of `['Technology', 'Workshop', 'Cultural', 'Academic', 'Sports']`.
   - `capacity`: Integer $\ge 1$.
   - `startAt`: Valid future ISO 8601 string.
-- **Success Response (`201 Created`):** Returns created event object with `confirmedCount: 0`, `status: "PUBLISHED"`, and `organizerId` set to authenticated user ID.
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "event": {
+      "eventId": "evt-react-aws-2026",
+      "title": "Zero-to-Production: Full-Stack React & AWS Workshop",
+      "description": "Hands-on practical session building high-performance SPAs.",
+      "category": "Workshop",
+      "startAt": "2026-11-28T14:00:00.000Z",
+      "endAt": "2026-11-28T17:00:00.000Z",
+      "venue": "Seminar Hall B, IT Building",
+      "capacity": 40,
+      "confirmedCount": 0,
+      "status": "PUBLISHED",
+      "organizerId": "usr-organizer-01",
+      "bannerUrl": "https://images.unsplash.com/...",
+      "createdAt": "2026-10-31T12:00:00.000Z"
+    }
+  }
+  ```
 - **Errors:**
   - `401 UNAUTHORIZED`: Missing/invalid token.
   - `403 FORBIDDEN`: Caller's global role is not `ORGANIZER`.
@@ -198,7 +217,26 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **Request Body:** Partial update fields (`title`, `description`, `category`, `startAt`, `endAt`, `venue`, `capacity`, `bannerUrl`).
 - **Validation Rules:**
   - If `capacity` is provided, it cannot be less than the current `confirmedCount`.
-- **Success Response (`200 OK`):** Returns updated event object.
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "event": {
+      "eventId": "evt-ccl-hackathon-2026",
+      "title": "Cloud Canvas 2026: Campus Hackathon (Updated)",
+      "description": "48-hour premier cloud computing hackathon.",
+      "category": "Technology",
+      "startAt": "2026-11-15T09:00:00.000Z",
+      "endAt": "2026-11-17T17:00:00.000Z",
+      "venue": "Auditorium & Lab 502, VESIT Campus",
+      "capacity": 120,
+      "confirmedCount": 88,
+      "status": "PUBLISHED",
+      "organizerId": "usr-organizer-01",
+      "bannerUrl": "https://images.unsplash.com/...",
+      "updatedAt": "2026-10-31T12:00:00.000Z"
+    }
+  }
+  ```
 - **Errors:**
   - `401 UNAUTHORIZED`: Missing/invalid token.
   - `403 FORBIDDEN`: Caller is not `ORGANIZER` or does not own this event.
@@ -245,8 +283,8 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
   ```
 - **Validation Rules:**
   - `email`: Required valid email address.
-  - Look up target user in `MarqueUsers` by normalized email. User must exist.
-  - Does NOT alter the user's global role in `MarqueUsers`.
+  - Look up target user in `MarqueUsers` using strongly consistent base table email lock query. Target account must already exist.
+  - Does NOT alter the user's global role in `MarqueUsers` (stays `ATTENDEE` or `ORGANIZER`).
   - Inserts staff record into `MarqueEventStaff` with `permission: "CHECK_IN"`.
 - **Success Response (`201 Created`):**
   ```json
@@ -263,7 +301,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
   }
   ```
 - **Errors:**
-  - `400 USER_NOT_FOUND`: No registered account exists with this email address.
+  - `400 USER_NOT_FOUND`: No registered account exists with this email address. Pre-registration is required.
   - `403 FORBIDDEN`: Caller does not own this event.
   - `409 ALREADY_ASSIGNED`: User is already an active coordinator for this event.
 
@@ -287,7 +325,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **Permissions:** Any authenticated user (`ATTENDEE` or `ORGANIZER`)
 - **Behavior:**
   - Queries `MarqueEventStaff` GSI `user-assigned-events-index` for `userId = caller.userId`.
-  - Also includes events owned by the user if caller is an `ORGANIZER` who assigned themselves.
+  - Returns strictly the events where the caller has been explicitly assigned as check-in staff (does not automatically return unassigned events owned by an organizer).
 - **Success Response (`200 OK`):**
   ```json
   {
@@ -330,7 +368,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
       ```
   - **Seat Full (`confirmedCount >= capacity`):**
     - Inserts user into `MarqueWaitlist` with queue key `<ISO8601_NOW>#<userId>`.
-    - Creates `MarqueRSVPs` record with `status: "WAITLISTED"`.
+    - Creates `MarqueRSVPs` record with `status: "WAITLISTED"` and `queueKey: "<ISO8601_NOW>#<userId>"`.
     - Determines `queuePosition` via strongly consistent base table count.
     - Returns `200 OK` (Note: waitlisting is an authorized, expected flow, not an error):
       ```json
@@ -338,6 +376,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
         "status": "WAITLISTED",
         "rsvpId": "rsvp-9a8b7c6d",
         "queuePosition": 3,
+        "queueKey": "2026-10-31T12:01:00.000Z#usr-waitlist-01",
         "message": "Event is currently full. You have been placed in the FIFO waitlist."
       }
       ```
@@ -354,11 +393,11 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **Behavior & Atomic Outcomes:**
   - If caller holds a `CONFIRMED` RSVP:
     - Atomically cancels the current RSVP and associated `MarqueTickets` entry.
-    - Queries `MarqueWaitlist` for oldest `WAITING` entry (`ScanIndexForward = true`, `Limit = 1`).
-    - **If waitlist candidate exists:** Promotes candidate to `CONFIRMED`, generates new active ticket, marks queue entry `PROMOTED`. Capacity count remains steady.
+    - Queries `MarqueWaitlist` for oldest entry (`ScanIndexForward = true`, `Limit = 1`).
+    - **If waitlist candidate exists:** Promotes candidate to `CONFIRMED`, generates new active ticket, transactionally deletes queue entry from `MarqueWaitlist`. Capacity count remains steady.
     - **If waitlist is empty:** Atomically decrements `confirmedCount` by 1.
   - If caller holds a `WAITLISTED` RSVP:
-    - Cancels waitlist queue item and sets RSVP to `CANCELLED`.
+    - Transactionally deletes entry directly from `MarqueWaitlist` using the `queueKey` recorded on `MarqueRSVPs` and sets RSVP status to `CANCELLED`.
 - **Success Response (`200 OK`):**
   ```json
   {
@@ -382,6 +421,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
         "eventId": "evt-ccl-hackathon-2026",
         "status": "CONFIRMED",
         "ticketId": "tkt-8f3a9e1b2c4d",
+        "queueKey": null,
         "createdAt": "2026-10-18T10:00:00.000Z",
         "event": {
           "title": "Cloud Canvas 2026: Campus Hackathon",
@@ -437,10 +477,10 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **Permissions:** Event owner (`ORGANIZER`) OR explicit check-in staff in `MarqueEventStaff`
 - **Query Parameters:**
   - `q` (required for coordinators, min 2 chars): Search term matching name, email, or ticket ID.
-  - For organizers, `q` is optional (allows full roster inspection).
-- **Behavior:**
-  - Organizers receive full attendee records.
-  - Coordinators receive minimal fields required for verification (`ticketId`, `attendeeName`, masked email, `status`).
+  - For event owners (organizers), `q` is optional (allows full roster inspection).
+- **Behavior & Data Privacy:**
+  - Organizers viewing their owned event receive full attendee records including complete emails.
+  - Assigned check-in staff (coordinators) receive minimal verification fields (`ticketId`, `attendeeName`, masked email like `ch***@example.com`, `status`, `checkedInAt`).
 - **Success Response (`200 OK`):**
   ```json
   {
@@ -456,15 +496,15 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
   }
   ```
 - **Errors:**
-  - `400 QUERY_REQUIRED`: Coordinators must supply `q` parameter of at least 2 characters.
+  - `400 QUERY_REQUIRED`: Check-in staff must supply `q` parameter of at least 2 characters.
   - `401 UNAUTHORIZED`: Missing token.
-  - `403 FORBIDDEN`: Caller is not authorized for check-in on this event.
+  - `403 FORBIDDEN`: Caller is not assigned staff or event owner.
 
 ### 7.2 Execute Single-Use Ticket Check-in
 - **HTTP Method:** `POST`
 - **Path:** `/api/events/{eventId}/check-in`
 - **Auth Required:** Yes
-- **Permissions:** Event owner (`ORGANIZER`) OR explicit staff assignment in `MarqueEventStaff`
+- **Permissions:** **Explicit staff assignment in `MarqueEventStaff` required for all callers**. Organizers who wish to check in attendees must explicitly assign themselves to the event's staff roster.
 - **Request Body:**
   ```json
   {
@@ -472,7 +512,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
   }
   ```
 - **Atomic Validation & Idempotency Rules:**
-  1. Caller verified in `MarqueEventStaff` for `eventId` (or owns `eventId`). Attendees rejected with `403 FORBIDDEN`.
+  1. Caller must have an explicit assignment in `MarqueEventStaff` with `eventId = :eventId AND userId = :callerId`. Unassigned users (including unassigned organizers) are rejected with `403 FORBIDDEN`.
   2. Ticket exists and matches `ticket.eventId === eventId`.
   3. Ticket status must be strictly `ACTIVE`.
   4. Conditional update transitions ticket to `CHECKED_IN`, recording `checkedInAt` and `checkedInBy`.
@@ -490,7 +530,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **Errors:**
   - `400 INVALID_EVENT`: Ticket belongs to a different event.
   - `400 TICKET_INACTIVE`: Ticket is cancelled or expired.
-  - `403 FORBIDDEN`: Caller is not assigned check-in staff for this event.
+  - `403 FORBIDDEN`: Caller is not explicitly assigned in `MarqueEventStaff` for this event.
   - `404 TICKET_NOT_FOUND`: Ticket reference does not exist.
   - `409 ALREADY_CHECKED_IN`:
     ```json
@@ -527,7 +567,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
 - **HTTP Method:** `GET`
 - **Path:** `/api/events/{eventId}/checkin-summary`
 - **Auth Required:** Yes
-- **Permissions:** Assigned check-in staff (`MarqueEventStaff`) or event owner
+- **Permissions:** **Explicit staff assignment in `MarqueEventStaff` required**.
 - **Success Response (`200 OK`):**
   ```json
   {
@@ -535,6 +575,7 @@ Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative 
     "checkedInCount": 65
   }
   ```
+- **Errors:** `401 UNAUTHORIZED`, `403 FORBIDDEN` (caller is not in `MarqueEventStaff`).
 
 ---
 

@@ -16,10 +16,10 @@ export async function getEventStaff(eventId) {
 /**
  * Assign a coordinator to an event by email (Organizer only)
  * POST /api/events/{eventId}/staff
- * Body: { email: string, role: 'COORDINATOR' }
+ * Body: { email: string }
  */
 export async function assignCoordinator(eventId, email) {
-  return apiClient.post(`/api/events/${eventId}/staff`, { email, role: 'COORDINATOR' });
+  return apiClient.post(`/api/events/${eventId}/staff`, { email });
 }
 
 /**
@@ -37,4 +37,3 @@ export async function removeCoordinator(eventId, userId) {
 export async function getAssignedEvents() {
   return apiClient.get('/api/me/assigned-events');
 }
-

@@ -6,13 +6,19 @@ info:
     Production REST API specification for Marque — responsive campus event management,
     free RSVP, capacity reservation, deterministic FIFO waitlist, single-use QR ticketing,
     and event-scoped coordinator check-in on AWS Serverless.
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
 servers:
-  - url: https://api.marque.campus.edu
-    description: Production API Gateway Endpoint
-  - url: https://staging-api.marque.campus.edu
-    description: Staging Environment
-  - url: http://localhost:3000
-    description: Local Development / Offline Serverless Simulator
+  - url: https://{apiGatewayId}.execute-api.{region}.amazonaws.com/prod
+    description: Amazon API Gateway HTTP API Production/Staging Stage
+    variables:
+      apiGatewayId:
+        default: api-marque
+        description: API Gateway HTTP API Identifier
+      region:
+        default: ap-south-1
+        description: AWS Target Region
 
 paths:
   # ============================================================================
@@ -148,6 +154,8 @@ paths:
                     status: PUBLISHED
                     organizerId: usr-organizer-01
                     bannerUrl: https://images.unsplash.com/photo-1504384308090-c894fdcc538d
+        '400':
+          $ref: '#/components/responses/ValidationError'
     post:
       summary: Create Campus Event
       description: Creates a new campus event. Restricted strictly to global role ORGANIZER.
@@ -905,9 +913,10 @@ components:
           type: string
           format: date-time
         endAt:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         venue:
           type: string
         capacity:
@@ -921,9 +930,10 @@ components:
         organizerId:
           type: string
         bannerUrl:
-          type: string
+          type:
+            - string
+            - 'null'
           format: uri
-          nullable: true
         createdAt:
           type: string
           format: date-time
@@ -1137,8 +1147,9 @@ components:
         message:
           type: string
         promotedAttendee:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
 
     UserRsvpSummary:
       type: object
@@ -1157,11 +1168,18 @@ components:
           type: string
           enum: [CONFIRMED, WAITLISTED, CANCELLED]
         ticketId:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
+        queueKey:
+          type:
+            - string
+            - 'null'
+          description: Sorting key in MarqueWaitlist base table when WAITLISTED.
         queuePosition:
-          type: integer
-          nullable: true
+          type:
+            - integer
+            - 'null'
         createdAt:
           type: string
           format: date-time
@@ -1225,12 +1243,14 @@ components:
           type: string
           format: date-time
         checkedInAt:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
         checkedInBy:
-          type: string
-          nullable: true
+          type:
+            - string
+            - 'null'
 
     TicketResponse:
       type: object
@@ -1259,9 +1279,10 @@ components:
           type: string
           enum: [ACTIVE, CHECKED_IN, CANCELLED]
         checkedInAt:
-          type: string
+          type:
+            - string
+            - 'null'
           format: date-time
-          nullable: true
 
     AttendeeSearchResponse:
       type: object
