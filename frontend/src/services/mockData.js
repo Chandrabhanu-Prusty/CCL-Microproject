@@ -56,7 +56,7 @@ let mockEvents = [
     eventId: 'evt-react-vite-masterclass',
     title: 'Zero-to-Production: Full-Stack React & AWS Workshop',
     description: 'Hands-on practical session building high-performance SPAs with React, Vite, serverless Node.js Lambda backends, and DynamoDB conditional writes.',
-    category: 'Academic',
+    category: 'Workshop',
     startAt: '2026-11-28T14:00:00Z',
     endAt: '2026-11-28T17:00:00Z',
     venue: 'Seminar Hall B, IT Building',
@@ -66,6 +66,21 @@ let mockEvents = [
     organizerId: 'usr-organizer-01',
     bannerUrl: 'https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=1200&q=80',
     createdAt: '2026-10-15T09:00:00Z',
+  },
+  {
+    eventId: 'evt-ccl-research-symposium',
+    title: 'National Cloud & Distributed Systems Symposium',
+    description: 'Faculty and student peer-reviewed research presentations on edge computing, serverless scalability, and distributed cloud ledger mechanisms.',
+    category: 'Academic',
+    startAt: '2026-12-10T10:00:00Z',
+    endAt: '2026-12-10T16:30:00Z',
+    venue: 'Conference Hall 1, Central Library',
+    capacity: 75,
+    confirmedCount: 42,
+    status: 'PUBLISHED',
+    organizerId: 'usr-organizer-02',
+    bannerUrl: 'https://images.unsplash.com/photo-1434030216411-0b793f4b4173?auto=format&fit=crop&w=1200&q=80',
+    createdAt: '2026-10-16T11:00:00Z',
   }
 ];
 

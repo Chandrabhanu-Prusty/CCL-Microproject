@@ -1,5 +1,5 @@
 import React from 'react';
-import { CheckCircle2, Clock, XCircle, QrCode } from 'lucide-react';
+import { CheckCircle2, Clock, XCircle, QrCode, Sparkles } from 'lucide-react';
 
 export default function StatusBadge({ status, className = '' }) {
   if (!status) return null;
@@ -11,30 +11,37 @@ export default function StatusBadge({ status, className = '' }) {
     case 'ACTIVE':
       return (
         <span className={`status-badge badge-confirmed ${className}`}>
-          <CheckCircle2 size={13} />
-          {normalized === 'ACTIVE' ? 'Active Ticket' : 'Confirmed'}
+          <CheckCircle2 size={12} />
+          {normalized === 'ACTIVE' ? 'Active' : 'Confirmed'}
         </span>
       );
     case 'WAITLISTED':
     case 'WAITING':
       return (
         <span className={`status-badge badge-waitlisted ${className}`}>
-          <Clock size={13} />
+          <Clock size={12} />
           Waitlisted
         </span>
       );
     case 'CHECKED_IN':
       return (
         <span className={`status-badge badge-checked_in ${className}`}>
-          <QrCode size={13} />
+          <QrCode size={12} />
           Checked In
         </span>
       );
     case 'CANCELLED':
       return (
         <span className={`status-badge badge-cancelled ${className}`}>
-          <XCircle size={13} />
+          <XCircle size={12} />
           Cancelled
+        </span>
+      );
+    case 'PUBLISHED':
+      return (
+        <span className={`status-badge badge-published ${className}`}>
+          <Sparkles size={12} />
+          Published
         </span>
       );
     default:

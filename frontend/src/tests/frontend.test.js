@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { mockBackend } from '../services/mockData.js';
 import { getAuthHeaders } from '../auth/authHelpers.js';
+import { apiRequest, getApiConfig } from '../services/apiClient.js';
 
 describe('Auth Helpers & Token Management', () => {
   test('getAuthHeaders generates correct Content-Type and Bearer token', () => {
@@ -87,3 +88,85 @@ describe('API Contract & Mock Backend Verification', () => {
     assert.ok(!res.ticket.ticketId.includes('jwt'));
   });
 });
+
+describe('API Client & Explicit Mock Mode Enforcements', () => {
+  test('apiRequest throws CONFIG_ERROR when neither base URL nor mock mode is configured', async () => {
+    delete process.env.VITE_API_BASE_URL;
+    delete process.env.VITE_USE_MOCK_API;
+    const config = getApiConfig();
+    assert.equal(config.isMockMode, false);
+    assert.equal(config.baseUrl, '');
+    await assert.rejects(
+      async () => {
+        await apiRequest('/api/events');
+      },
+      (err) => {
+        return err.code === 'CONFIG_ERROR' && err.message.includes('API base URL is not configured');
+      }
+    );
+  });
+
+  test('apiRequest executes mock request when VITE_USE_MOCK_API is explicitly true', async () => {
+    delete process.env.VITE_API_BASE_URL;
+    process.env.VITE_USE_MOCK_API = 'true';
+    const config = getApiConfig();
+    assert.equal(config.isMockMode, true);
+    const res = await apiRequest('/api/events');
+    assert.ok(Array.isArray(res.events));
+    assert.ok(res.events.length > 0);
+  });
+
+  test('apiRequest throws NETWORK_ERROR and never falls back to mock data when backend is unreachable', async () => {
+    process.env.VITE_API_BASE_URL = 'http://127.0.0.1:59999';
+    process.env.VITE_USE_MOCK_API = 'true'; // even if set to true, real URL takes precedence
+    const config = getApiConfig();
+    assert.equal(config.isMockMode, false);
+    await assert.rejects(
+      async () => {
+        await apiRequest('/api/events');
+      },
+      (err) => {
+        return err.code === 'NETWORK_ERROR' && err.message.includes('Unable to reach the Marque backend');
+      }
+    );
+    // Cleanup env
+    delete process.env.VITE_API_BASE_URL;
+    delete process.env.VITE_USE_MOCK_API;
+  });
+});
+
+describe('Stakeholder Registration & Auth Guardrails', () => {
+  test('public registration endpoint returns ATTENDEE role by default', async () => {
+    process.env.VITE_USE_MOCK_API = 'true';
+    delete process.env.VITE_API_BASE_URL;
+    const res = await apiRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'New Campus Member',
+        email: 'new.member@campus.edu',
+        password: 'SecurePassword123!',
+      }),
+    });
+    assert.ok(res.token);
+    assert.ok(res.user);
+    assert.equal(res.user.role, 'ATTENDEE');
+    delete process.env.VITE_USE_MOCK_API;
+  });
+
+  test('public registration ignores any privileged role passed in body', async () => {
+    process.env.VITE_USE_MOCK_API = 'true';
+    delete process.env.VITE_API_BASE_URL;
+    const res = await apiRequest('/api/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: 'Attacker Attempting Privileges',
+        email: 'attacker@campus.edu',
+        password: 'SecurePassword123!',
+        role: 'ORGANIZER', // Client trying to elevate privileges
+      }),
+    });
+    assert.equal(res.user.role, 'ATTENDEE');
+    delete process.env.VITE_USE_MOCK_API;
+  });
+});
+

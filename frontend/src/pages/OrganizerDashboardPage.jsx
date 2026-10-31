@@ -1,31 +1,39 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  PlusCircle, 
+  Plus, 
+  Search, 
+  Filter, 
   BarChart3, 
   Edit3, 
   Users, 
-  Clock, 
-  CheckCircle2, 
-  X, 
   Calendar, 
   MapPin, 
+  X, 
   ShieldAlert, 
-  Sparkles, 
-  ArrowRight 
+  Sparkles,
+  CheckCircle2,
+  TrendingUp,
+  UserCheck
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import * as eventService from '../services/eventService';
 import * as checkinService from '../services/checkinService';
+import EventRow from '../components/EventRow';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 import StatusBadge from '../components/StatusBadge';
-import CapacityBar from '../components/CapacityBar';
+
+const CATEGORIES = ['All', 'Technology', 'Workshop', 'Cultural', 'Academic', 'Sports'];
 
 export default function OrganizerDashboardPage() {
-  const { user, isOrganizer, switchRole } = useAuth();
+  const { user, isOrganizer, switchRole, isMockMode } = useAuth();
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Search & filter
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('All');
 
   // Modals state
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -37,7 +45,7 @@ export default function OrganizerDashboardPage() {
   const [attendeesList, setAttendeesList] = useState([]);
   const [attendeesLoading, setAttendeesLoading] = useState(false);
 
-  // Form state
+  // Form state (matching API_CONTRACT.md)
   const [formData, setFormData] = useState({
     title: '',
     description: '',
@@ -56,11 +64,10 @@ export default function OrganizerDashboardPage() {
       setLoading(true);
       setError(null);
       const res = await eventService.getEvents();
-      // Show all events or events managed by this organizer
       setEvents(res.events || []);
     } catch (err) {
       console.error('Failed to load organizer events:', err);
-      setError(err.message || 'Unable to retrieve events.');
+      setError(err.message || 'Unable to retrieve events from backend.');
     } finally {
       setLoading(false);
     }
@@ -68,6 +75,15 @@ export default function OrganizerDashboardPage() {
 
   useEffect(() => {
     fetchOrganizerEvents();
+  }, []);
+
+  // Listen for "+ New Event" event from top header
+  useEffect(() => {
+    const handleOpenCreate = () => {
+      openCreateModal();
+    };
+    window.addEventListener('marque:open-create-event', handleOpenCreate);
+    return () => window.removeEventListener('marque:open-create-event', handleOpenCreate);
   }, []);
 
   const openCreateModal = () => {
@@ -109,10 +125,14 @@ export default function OrganizerDashboardPage() {
 
     try {
       const payload = {
-        ...formData,
+        title: formData.title.trim(),
+        description: formData.description.trim(),
+        category: formData.category,
         capacity: Number(formData.capacity),
+        venue: formData.venue.trim(),
         startAt: new Date(formData.startAt).toISOString(),
         endAt: formData.endAt ? new Date(formData.endAt).toISOString() : undefined,
+        bannerUrl: formData.bannerUrl.trim() || undefined,
       };
 
       if (editingEvent) {
@@ -127,7 +147,7 @@ export default function OrganizerDashboardPage() {
       await fetchOrganizerEvents();
     } catch (err) {
       console.error('Save event error:', err);
-      setFormError(err.message || 'Failed to save event details.');
+      setFormError(err.message || 'Failed to save event details. Please verify capacity and required fields.');
     } finally {
       setFormSubmitting(false);
     }
@@ -159,131 +179,138 @@ export default function OrganizerDashboardPage() {
     }
   };
 
+  const filteredEvents = events.filter((e) => {
+    const matchesQuery = !searchQuery || 
+      e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (e.venue && e.venue.toLowerCase().includes(searchQuery.toLowerCase()));
+    const matchesCategory = selectedCategory === 'All' || e.category === selectedCategory;
+    return matchesQuery && matchesCategory;
+  });
+
   return (
-    <div>
-      {/* Header */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+      {/* Page Header (GDG Style: "Events" + "+ New Event" Button) */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Organizer Dashboard</h1>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Publish campus events, manage capacities, monitor registrations, and track venue attendance.
+          <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>Events</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+            Manage campus event schedules, capacity allocations, registrations, and venue check-in records.
           </p>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          {!isOrganizer && (
+        <button onClick={openCreateModal} className="btn btn-primary">
+          <Plus size={16} />
+          <span>New Event</span>
+        </button>
+      </div>
+
+      {/* Role Notice when user is not in ORGANIZER role */}
+      {!isOrganizer && (
+        <div style={{ padding: '0.85rem 1.15rem', borderRadius: 'var(--radius-sm)', background: 'rgba(240, 182, 90, 0.12)', border: '1px solid rgba(240, 182, 90, 0.35)', color: 'var(--status-warning)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', fontSize: '0.875rem' }}>
+            <ShieldAlert size={18} style={{ flexShrink: 0 }} />
+            <span>
+              You are signed in as <strong>{user?.role || 'Attendee'}</strong>. Event creation and editing requires the <strong>ORGANIZER</strong> role.
+            </span>
+          </div>
+          {isMockMode && (
             <button
               onClick={() => switchRole('ORGANIZER')}
-              className="btn btn-secondary btn-sm"
-              style={{ borderColor: 'rgba(236, 72, 153, 0.4)', color: '#f472b6' }}
+              className="btn btn-sm btn-secondary"
+              style={{ color: 'var(--status-warning)', borderColor: 'rgba(240, 182, 90, 0.4)' }}
             >
-              <Sparkles size={14} />
-              Switch to Organizer Role
+              <UserCheck size={14} />
+              <span>Switch to Organizer Persona</span>
             </button>
           )}
+        </div>
+      )}
 
-          <button onClick={openCreateModal} className="btn btn-primary">
-            <PlusCircle size={18} />
-            Create Event
-          </button>
+      {/* Search & Filter Toolbar */}
+      <div className="filter-toolbar">
+        <div className="search-box">
+          <Search size={16} />
+          <input
+            type="text"
+            placeholder="Search managed events by title or venue..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="form-input"
+            aria-label="Search events"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              style={{ position: 'absolute', right: '0.85rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+
+        <div className="filter-group">
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setSelectedCategory(cat)}
+              className={`btn btn-sm ${selectedCategory === cat ? 'btn-primary' : 'btn-secondary'}`}
+              style={{ fontSize: '0.75rem', padding: '0.35rem 0.65rem' }}
+            >
+              {cat}
+            </button>
+          ))}
         </div>
       </div>
 
-      {/* Role Reminder if not in Organizer role */}
-      {!isOrganizer && (
-        <div style={{ marginBottom: '1.5rem', padding: '1rem 1.25rem', borderRadius: 'var(--radius-md)', background: 'rgba(236, 72, 153, 0.1)', border: '1px solid rgba(236, 72, 153, 0.3)', color: '#fbcfe8', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.875rem' }}>
-            <ShieldAlert size={18} style={{ color: '#f472b6' }} />
-            <span>You are currently viewing as <strong>{user?.role || 'Attendee'}</strong>. Click 'Switch to Organizer Role' to enable full creation/editing permissions.</span>
+      {/* Event Management List (GDG Horizontal Event Rows) */}
+      <section aria-label="Event Management List">
+        {loading ? (
+          <LoadingSpinner message="Retrieving managed events..." />
+        ) : error ? (
+          <ErrorMessage title="Error fetching events" message={error} onRetry={fetchOrganizerEvents} />
+        ) : filteredEvents.length === 0 ? (
+          <div className="card" style={{ textAlign: 'center', padding: '3.5rem 1.5rem' }}>
+            <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem', fontSize: '0.9375rem' }}>
+              {searchQuery ? 'No events found matching your search.' : 'No events published yet.'}
+            </p>
+            <button onClick={openCreateModal} className="btn btn-primary">
+              <Plus size={16} />
+              <span>Create Your First Event</span>
+            </button>
           </div>
-          <button onClick={() => switchRole('ORGANIZER')} className="btn btn-sm btn-primary" style={{ flexShrink: 0 }}>
-            Activate Role
-          </button>
-        </div>
-      )}
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            {filteredEvents.map((event) => (
+              <EventRow
+                key={event.eventId}
+                event={event}
+                variant="organizer"
+                onEdit={openEditModal}
+                onViewStats={viewStats}
+                onViewAttendees={viewAttendees}
+              />
+            ))}
+          </div>
+        )}
+      </section>
 
-      {/* Events Table / Cards */}
-      {loading ? (
-        <LoadingSpinner message="Loading organizer events..." />
-      ) : error ? (
-        <ErrorMessage title="Error fetching events" message={error} onRetry={fetchOrganizerEvents} />
-      ) : events.length === 0 ? (
-        <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
-          <p style={{ color: 'var(--text-secondary)', marginBottom: '1rem' }}>No events published yet.</p>
-          <button onClick={openCreateModal} className="btn btn-primary">
-            Create Your First Event
-          </button>
-        </div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: '1.5rem' }}>
-          {events.map((event) => (
-            <div key={event.eventId} className="card" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
-                <span className="category-pill">{event.category || 'General'}</span>
-                <span className="status-badge badge-active">{event.status || 'PUBLISHED'}</span>
-              </div>
-
-              <h3 style={{ fontSize: '1.25rem', lineHeight: 1.3 }}>{event.title}</h3>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem', fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <Calendar size={14} style={{ color: 'var(--accent-primary)' }} />
-                  <span>{new Date(event.startAt).toLocaleDateString()}</span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                  <MapPin size={14} style={{ color: 'var(--accent-secondary)' }} />
-                  <span>{event.venue || 'Campus Venue'}</span>
-                </div>
-              </div>
-
-              <CapacityBar confirmed={event.confirmedCount} capacity={event.capacity} />
-
-              {/* Action Buttons */}
-              <div style={{ marginTop: 'auto', paddingTop: '0.75rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: '0.5rem' }}>
-                <button
-                  onClick={() => viewStats(event)}
-                  className="btn btn-sm btn-primary"
-                  style={{ flex: 1 }}
-                >
-                  <BarChart3 size={14} />
-                  Analytics
-                </button>
-                <button
-                  onClick={() => viewAttendees(event)}
-                  className="btn btn-sm btn-secondary"
-                  title="View Attendee List"
-                >
-                  <Users size={14} />
-                  Attendees
-                </button>
-                <button
-                  onClick={() => openEditModal(event)}
-                  className="btn btn-sm btn-outline"
-                  title="Edit Event"
-                >
-                  <Edit3 size={14} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Create / Edit Modal */}
+      {/* Create / Edit Modal (Matching API_CONTRACT.md fields) */}
       {showCreateModal && (
-        <div className="modal-overlay" onClick={() => setShowCreateModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '580px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-              <h2 style={{ fontSize: '1.25rem' }}>
-                {editingEvent ? 'Edit Event Details' : 'Create Campus Event'}
+        <div className="modal-overlay" onClick={() => setShowCreateModal(false)} role="dialog" aria-modal="true" aria-labelledby="event-form-title">
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '600px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
+              <h2 id="event-form-title" style={{ fontSize: '1.25rem' }}>
+                {editingEvent ? 'Edit Campus Event' : 'Create New Campus Event'}
               </h2>
-              <button onClick={() => setShowCreateModal(false)} style={{ color: 'var(--text-muted)' }}>
-                <X size={20} />
+              <button onClick={() => setShowCreateModal(false)} aria-label="Close dialog" style={{ color: 'var(--text-muted)' }}>
+                <X size={18} />
               </button>
             </div>
 
             {formError && (
-              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 'var(--radius-md)', color: '#fca5a5', fontSize: '0.8125rem' }}>
+              <div style={{ marginBottom: '1rem', padding: '0.75rem', background: 'var(--status-error-bg)', border: '1px solid var(--status-error-border)', borderRadius: 'var(--radius-sm)', color: 'var(--status-error)', fontSize: '0.8125rem' }}>
                 {formError}
               </div>
             )}
@@ -318,7 +345,7 @@ export default function OrganizerDashboardPage() {
                 </div>
 
                 <div className="form-group">
-                  <label className="form-label">Maximum Capacity *</label>
+                  <label className="form-label">Capacity (Seats) *</label>
                   <input
                     type="number"
                     min={editingEvent ? editingEvent.confirmedCount : 1}
@@ -329,7 +356,7 @@ export default function OrganizerDashboardPage() {
                   />
                   {editingEvent && (
                     <span className="form-helper">
-                      Minimum {editingEvent.confirmedCount} (cannot reduce below confirmed RSVPs)
+                      Min {editingEvent.confirmedCount} (cannot reduce below confirmed RSVPs)
                     </span>
                   )}
                 </div>
@@ -359,7 +386,7 @@ export default function OrganizerDashboardPage() {
               </div>
 
               <div className="form-group">
-                <label className="form-label">Venue / Location *</label>
+                <label className="form-label">Venue Location *</label>
                 <input
                   type="text"
                   placeholder="e.g. Auditorium & Lab 502, VESIT Campus"
@@ -385,7 +412,7 @@ export default function OrganizerDashboardPage() {
                 <label className="form-label">Description *</label>
                 <textarea
                   rows={4}
-                  placeholder="Describe event agenda, prerequisites, speaker highlights..."
+                  placeholder="Describe the event format, speaker bios, rules, and prerequisites..."
                   value={formData.description}
                   onChange={(e) => setFormData({ ...formData, description: e.target.value })}
                   className="form-textarea"
@@ -393,7 +420,7 @@ export default function OrganizerDashboardPage() {
                 />
               </div>
 
-              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '1.5rem' }}>
+              <div style={{ display: 'flex', gap: '0.65rem', justifyContent: 'flex-end', marginTop: '1.25rem', borderTop: '1px solid var(--border-subtle)', paddingTop: '1rem' }}>
                 <button
                   type="button"
                   onClick={() => setShowCreateModal(false)}
@@ -406,7 +433,7 @@ export default function OrganizerDashboardPage() {
                   disabled={formSubmitting}
                   className="btn btn-primary"
                 >
-                  {formSubmitting ? 'Saving...' : editingEvent ? 'Save Changes' : 'Publish Event'}
+                  {formSubmitting ? 'Saving...' : editingEvent ? 'Update Event' : 'Publish Event'}
                 </button>
               </div>
             </form>
@@ -416,61 +443,69 @@ export default function OrganizerDashboardPage() {
 
       {/* Analytics & Stats Modal */}
       {statsEvent && (
-        <div className="modal-overlay" onClick={() => setStatsEvent(null)}>
+        <div className="modal-overlay" onClick={() => setStatsEvent(null)} role="dialog" aria-modal="true" aria-labelledby="stats-modal-title">
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
               <div>
-                <span style={{ fontSize: '0.75rem', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>
-                  Live Event Analytics
+                <span style={{ fontSize: '0.6875rem', color: 'var(--accent-pink)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>
+                  Live Attendance Analytics
                 </span>
-                <h3 style={{ fontSize: '1.25rem', marginTop: '0.15rem' }}>{statsEvent.title}</h3>
+                <h3 id="stats-modal-title" style={{ fontSize: '1.15rem', marginTop: '0.15rem' }}>
+                  {statsEvent.title}
+                </h3>
               </div>
-              <button onClick={() => setStatsEvent(null)} style={{ color: 'var(--text-muted)' }}>
-                <X size={20} />
+              <button onClick={() => setStatsEvent(null)} aria-label="Close analytics modal" style={{ color: 'var(--text-muted)' }}>
+                <X size={18} />
               </button>
             </div>
 
             {statsLoading ? (
-              <LoadingSpinner message="Calculating capacity and attendance metrics..." />
+              <LoadingSpinner message="Calculating capacity & check-in metrics..." />
             ) : statsData ? (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '1rem' }}>
-                  <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Capacity</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: 'var(--text-primary)' }}>{statsData.capacity}</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '0.75rem' }}>
+                  <div style={{ background: '#14151B', padding: '0.85rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)', textTransform: 'uppercase', fontWeight: 600 }}>Capacity</div>
+                    <div style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--text-primary)' }}>{statsData.capacity}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Total Allocated Seats</div>
                   </div>
 
-                  <div style={{ background: 'rgba(16, 185, 129, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#34d399', textTransform: 'uppercase' }}>Confirmed RSVPs</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#34d399' }}>{statsData.confirmedCount}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Active Bookings</div>
+                  <div style={{ background: 'var(--status-success-bg)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--status-success-border)' }}>
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--status-success)', textTransform: 'uppercase', fontWeight: 600 }}>Confirmed RSVPs</div>
+                    <div style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--status-success)' }}>{statsData.confirmedCount}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Active Registrations</div>
                   </div>
 
-                  <div style={{ background: 'rgba(245, 158, 11, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(245, 158, 11, 0.3)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#fbbf24', textTransform: 'uppercase' }}>Waitlist</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#fbbf24' }}>{statsData.waitlistCount}</div>
+                  <div style={{ background: 'var(--status-warning-bg)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--status-warning-border)' }}>
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--status-warning)', textTransform: 'uppercase', fontWeight: 600 }}>Waitlist</div>
+                    <div style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--status-warning)' }}>{statsData.waitlistCount}</div>
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>In FIFO Queue</div>
                   </div>
 
-                  <div style={{ background: 'rgba(59, 130, 246, 0.1)', padding: '1rem', borderRadius: 'var(--radius-md)', border: '1px solid rgba(59, 130, 246, 0.3)' }}>
-                    <div style={{ fontSize: '0.75rem', color: '#60a5fa', textTransform: 'uppercase' }}>Checked In</div>
-                    <div style={{ fontSize: '1.75rem', fontWeight: 800, color: '#60a5fa' }}>{statsData.checkedInCount}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Venue Arrivals</div>
+                  <div style={{ background: 'var(--status-info-bg)', padding: '0.85rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--status-info-border)' }}>
+                    <div style={{ fontSize: '0.6875rem', color: 'var(--status-info)', textTransform: 'uppercase', fontWeight: 600 }}>Checked In</div>
+                    <div style={{ fontSize: '1.65rem', fontWeight: 800, color: 'var(--status-info)' }}>{statsData.checkedInCount}</div>
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>Admitted Attendees</div>
                   </div>
                 </div>
 
-                {/* Attendance Percentage Ring/Bar */}
-                <div style={{ background: 'rgba(15, 23, 42, 0.7)', padding: '1.25rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                {/* Attendance Rate */}
+                <div style={{ background: '#14151B', padding: '1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                    <span style={{ fontWeight: 600, fontSize: '0.875rem' }}>Attendance Rate</span>
-                    <span style={{ fontWeight: 800, color: '#60a5fa', fontSize: '1.125rem' }}>{statsData.attendancePercentage}%</span>
+                    <span style={{ fontWeight: 600, fontSize: '0.8125rem' }}>Attendance Turnout</span>
+                    <span style={{ fontWeight: 800, color: 'var(--status-info)', fontSize: '1.125rem' }}>{statsData.attendancePercentage}%</span>
                   </div>
                   <div className="capacity-bar-track">
-                    <div className="capacity-bar-fill capacity-safe" style={{ width: `${statsData.attendancePercentage}%`, background: 'linear-gradient(90deg, #3b82f6, #6366f1)' }} />
+                    <div 
+                      className="capacity-bar-fill" 
+                      style={{ 
+                        width: `${statsData.attendancePercentage}%`, 
+                        background: 'linear-gradient(90deg, #F04F8B, #FF984F)' 
+                      }} 
+                    />
                   </div>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem', display: 'block' }}>
-                    {statsData.checkedInCount} of {statsData.confirmedCount} confirmed attendees checked in.
+                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem', display: 'block' }}>
+                    {statsData.checkedInCount} of {statsData.confirmedCount} confirmed ticket holders arrived.
                   </span>
                 </div>
               </div>
@@ -481,32 +516,45 @@ export default function OrganizerDashboardPage() {
 
       {/* Attendees List Modal */}
       {attendeesModalEvent && (
-        <div className="modal-overlay" onClick={() => setAttendeesModalEvent(null)}>
+        <div className="modal-overlay" onClick={() => setAttendeesModalEvent(null)} role="dialog" aria-modal="true" aria-labelledby="attendees-modal-title">
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '640px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '0.75rem' }}>
               <div>
-                <span style={{ fontSize: '0.75rem', color: '#a5b4fc', textTransform: 'uppercase', fontWeight: 700 }}>
+                <span style={{ fontSize: '0.6875rem', color: 'var(--accent-orange)', textTransform: 'uppercase', fontWeight: 700, letterSpacing: '0.05em' }}>
                   Attendee Registry
                 </span>
-                <h3 style={{ fontSize: '1.25rem', marginTop: '0.15rem' }}>{attendeesModalEvent.title}</h3>
+                <h3 id="attendees-modal-title" style={{ fontSize: '1.15rem', marginTop: '0.15rem' }}>
+                  {attendeesModalEvent.title}
+                </h3>
               </div>
-              <button onClick={() => setAttendeesModalEvent(null)} style={{ color: 'var(--text-muted)' }}>
-                <X size={20} />
+              <button onClick={() => setAttendeesModalEvent(null)} aria-label="Close attendee modal" style={{ color: 'var(--text-muted)' }}>
+                <X size={18} />
               </button>
             </div>
 
             {attendeesLoading ? (
               <LoadingSpinner message="Retrieving attendee records..." />
             ) : attendeesList.length === 0 ? (
-              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0' }}>
-                No attendees registered yet.
+              <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '2rem 0', fontSize: '0.875rem' }}>
+                No attendees registered yet for this event.
               </p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '400px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '400px', overflowY: 'auto' }}>
                 {attendeesList.map((a) => (
-                  <div key={a.ticketId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.75rem 1rem', background: 'rgba(15, 23, 42, 0.7)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)' }}>
+                  <div 
+                    key={a.ticketId} 
+                    style={{ 
+                      display: 'flex', 
+                      justifyContent: 'space-between', 
+                      alignItems: 'center', 
+                      padding: '0.65rem 0.85rem', 
+                      background: '#14151B', 
+                      borderRadius: 'var(--radius-sm)', 
+                      border: '1px solid var(--border-subtle)' 
+                    }}
+                  >
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{a.attendeeName}</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{a.attendeeName}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{a.attendeeEmail}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.6875rem', fontFamily: 'monospace', marginTop: '0.2rem' }}>
                         ID: {a.ticketId}

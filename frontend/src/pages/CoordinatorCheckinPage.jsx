@@ -11,7 +11,8 @@ import {
   ShieldCheck, 
   Sparkles, 
   ArrowRight, 
-  Ticket 
+  Ticket,
+  UserCheck
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import * as eventService from '../services/eventService';
@@ -22,7 +23,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import ErrorMessage from '../components/ErrorMessage';
 
 export default function CoordinatorCheckinPage() {
-  const { user, isCoordinator, switchRole } = useAuth();
+  const { user, isCoordinator, switchRole, isMockMode } = useAuth();
   const [events, setEvents] = useState([]);
   const [selectedEventId, setSelectedEventId] = useState('');
   const [activeTab, setActiveTab] = useState('CAMERA'); // 'CAMERA' | 'MANUAL'
@@ -36,9 +37,9 @@ export default function CoordinatorCheckinPage() {
   const [attendeesLoading, setAttendeesLoading] = useState(false);
 
   // Check-in result status
-  const [checkInResult, setCheckInResult] = useState(null); // { type: 'success' | 'warning' | 'error', message: '', details: {} }
+  const [checkInResult, setCheckInResult] = useState(null);
 
-  // Sound feedback helper
+  // Sound feedback helper for venue coordinators
   const playFeedbackSound = (type) => {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -48,26 +49,25 @@ export default function CoordinatorCheckinPage() {
       gain.connect(ctx.destination);
 
       if (type === 'success') {
-        osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
-        gain.gain.setValueAtTime(0.3, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.28);
         osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.3);
+        osc.stop(ctx.currentTime + 0.28);
       } else {
-        osc.frequency.setValueAtTime(220, ctx.currentTime); // A3
+        osc.frequency.setValueAtTime(220, ctx.currentTime);
         osc.frequency.setValueAtTime(180, ctx.currentTime + 0.12);
-        gain.gain.setValueAtTime(0.4, ctx.currentTime);
+        gain.gain.setValueAtTime(0.35, ctx.currentTime);
         gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
         osc.start(ctx.currentTime);
         osc.stop(ctx.currentTime + 0.35);
       }
     } catch {
-      // AudioContext unavailable or blocked
+      // AudioContext unavailable
     }
   };
 
-  // Load events
   useEffect(() => {
     const fetchEvents = async () => {
       try {
@@ -87,7 +87,6 @@ export default function CoordinatorCheckinPage() {
     fetchEvents();
   }, []);
 
-  // Search attendees when in manual mode
   const searchAttendees = async (eventId, query) => {
     if (!eventId) return;
     try {
@@ -110,7 +109,6 @@ export default function CoordinatorCheckinPage() {
     }
   }, [activeTab, selectedEventId, searchQuery]);
 
-  // Execute single-use check-in via API
   const processCheckIn = async (ticketId) => {
     if (!selectedEventId) {
       alert('Please select an event first.');
@@ -129,7 +127,7 @@ export default function CoordinatorCheckinPage() {
       playFeedbackSound('success');
       setCheckInResult({
         type: 'success',
-        message: 'Ticket successfully verified and checked in!',
+        message: 'Ticket verified and successfully checked in! Admission approved.',
         details: {
           ticketId: result.ticketId,
           attendeeName: result.attendeeName,
@@ -138,7 +136,6 @@ export default function CoordinatorCheckinPage() {
         },
       });
 
-      // Refresh manual list if open
       if (activeTab === 'MANUAL') {
         await searchAttendees(selectedEventId, searchQuery);
       }
@@ -149,13 +146,13 @@ export default function CoordinatorCheckinPage() {
       if (err.code === 'ALREADY_CHECKED_IN' || err.status === 409) {
         setCheckInResult({
           type: 'warning',
-          message: err.message || 'Ticket has ALREADY been checked in. Do not admit twice!',
+          message: err.message || 'Ticket has ALREADY been admitted. Duplicate check-in rejected!',
           details: { ticketId: cleanId },
         });
       } else {
         setCheckInResult({
           type: 'error',
-          message: err.message || 'Invalid or unrecognized ticket reference.',
+          message: err.message || 'Invalid or unrecognized ticket ID for this event.',
           details: { ticketId: cleanId },
         });
       }
@@ -167,34 +164,41 @@ export default function CoordinatorCheckinPage() {
   const selectedEvent = events.find((e) => e.eventId === selectedEventId);
 
   return (
-    <div style={{ maxWidth: '800px', margin: '0 auto' }}>
+    <div style={{ maxWidth: '800px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
       {/* Header */}
-      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', borderBottom: '1px solid var(--border-subtle)', paddingBottom: '1rem' }}>
         <div>
-          <h1 style={{ fontSize: '2rem', marginBottom: '0.25rem' }}>Coordinator Venue Check-in</h1>
-          <p style={{ color: 'var(--text-secondary)' }}>
-            Scan digital QR tickets or perform manual attendee lookups at the campus venue entrance.
+          <h2 style={{ fontSize: '1.5rem', marginBottom: '0.25rem' }}>Venue Check-in</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.875rem' }}>
+            Verify attendee entry via camera QR scanner or search the registered guest list.
           </p>
         </div>
 
-        {!isCoordinator && (
+        {isMockMode && !isCoordinator && (
           <button
             onClick={() => switchRole('COORDINATOR')}
             className="btn btn-secondary btn-sm"
-            style={{ borderColor: 'rgba(59, 130, 246, 0.4)', color: '#60a5fa' }}
+            style={{ borderColor: 'rgba(240, 182, 90, 0.4)', color: 'var(--status-warning)' }}
           >
-            <Sparkles size={14} />
-            Switch to Coordinator Role
+            <UserCheck size={14} />
+            <span>Switch to Coordinator Persona</span>
           </button>
         )}
       </div>
 
-      {/* Event Selection Selector */}
-      <div className="card" style={{ marginBottom: '1.5rem', padding: '1.25rem' }}>
+      {/* Role Notice */}
+      {!isCoordinator && (
+        <div style={{ padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', background: 'var(--status-warning-bg)', border: '1px solid var(--status-warning-border)', color: 'var(--status-warning)', fontSize: '0.8125rem' }}>
+          You are signed in as <strong>{user?.role || 'Attendee'}</strong>. Check-in operations require <strong>Coordinator</strong> or <strong>Organizer</strong> permissions.
+        </div>
+      )}
+
+      {/* Event Selection */}
+      <div className="card" style={{ padding: '1rem 1.25rem' }}>
         <div className="form-group" style={{ marginBottom: 0 }}>
-          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Ticket size={16} style={{ color: 'var(--accent-primary)' }} />
-            Active Campus Event For Check-in
+          <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+            <Ticket size={15} style={{ color: 'var(--accent-pink)' }} />
+            <span>Active Campus Event for Check-in</span>
           </label>
           <select
             value={selectedEventId}
@@ -203,11 +207,11 @@ export default function CoordinatorCheckinPage() {
               setCheckInResult(null);
             }}
             className="form-select"
-            style={{ fontSize: '1rem', padding: '0.75rem 1rem' }}
+            aria-label="Select event for check-in"
           >
             {events.map((e) => (
-              <option key={e.eventId} value={e.eventId} style={{ background: '#111827', color: '#fff' }}>
-                {e.title} ({e.venue})
+              <option key={e.eventId} value={e.eventId} style={{ background: '#14151B', color: '#fff' }}>
+                {e.title} — {e.venue || 'Campus Venue'}
               </option>
             ))}
           </select>
@@ -215,16 +219,16 @@ export default function CoordinatorCheckinPage() {
       </div>
 
       {/* Tabs: Camera Scanner vs Manual Lookup */}
-      <div style={{ display: 'flex', gap: '0.75rem', marginBottom: '1.5rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--bg-card)', padding: '0.25rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-default)' }}>
         <button
           onClick={() => {
             setActiveTab('CAMERA');
             setCheckInResult(null);
           }}
-          className={`btn ${activeTab === 'CAMERA' ? 'btn-primary' : 'btn-secondary'}`}
-          style={{ flex: 1, padding: '0.75rem' }}
+          className={`btn btn-sm ${activeTab === 'CAMERA' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ flex: 1, padding: '0.5rem' }}
         >
-          <Camera size={18} />
+          <Camera size={16} />
           <span>Camera QR Scanner</span>
         </button>
 
@@ -233,75 +237,74 @@ export default function CoordinatorCheckinPage() {
             setActiveTab('MANUAL');
             setCheckInResult(null);
           }}
-          className={`btn ${activeTab === 'MANUAL' ? 'btn-primary' : 'btn-secondary'}`}
-          style={{ flex: 1, padding: '0.75rem' }}
+          className={`btn btn-sm ${activeTab === 'MANUAL' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ flex: 1, padding: '0.5rem' }}
         >
-          <Search size={18} />
-          <span>Manual Attendee Lookup</span>
+          <Search size={16} />
+          <span>Manual Guest Lookup</span>
         </button>
       </div>
 
-      {/* Check-in Verification Feedback Banner */}
+      {/* Validation Result Banner */}
       {checkInResult && (
         <div
           style={{
-            marginBottom: '1.5rem',
-            padding: '1.25rem',
-            borderRadius: 'var(--radius-lg)',
+            padding: '1rem 1.25rem',
+            borderRadius: 'var(--radius-sm)',
             background:
               checkInResult.type === 'success'
-                ? 'rgba(16, 185, 129, 0.18)'
+                ? 'var(--status-success-bg)'
                 : checkInResult.type === 'warning'
-                ? 'rgba(245, 158, 11, 0.18)'
-                : 'rgba(239, 68, 68, 0.18)',
-            border: `2px solid ${
+                ? 'var(--status-warning-bg)'
+                : 'var(--status-error-bg)',
+            border: `1px solid ${
               checkInResult.type === 'success'
-                ? '#10b981'
+                ? 'var(--status-success-border)'
                 : checkInResult.type === 'warning'
-                ? '#f59e0b'
-                : '#ef4444'
+                ? 'var(--status-warning-border)'
+                : 'var(--status-error-border)'
             }`,
             display: 'flex',
             flexDirection: 'column',
-            gap: '0.5rem',
-            animation: 'fadeIn 0.2s ease',
+            gap: '0.4rem',
+            animation: 'fadeIn 0.15s ease',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
             {checkInResult.type === 'success' ? (
-              <CheckCircle2 size={24} style={{ color: '#34d399', flexShrink: 0 }} />
+              <CheckCircle2 size={22} style={{ color: 'var(--status-success)', flexShrink: 0 }} />
             ) : checkInResult.type === 'warning' ? (
-              <AlertTriangle size={24} style={{ color: '#fbbf24', flexShrink: 0 }} />
+              <AlertTriangle size={22} style={{ color: 'var(--status-warning)', flexShrink: 0 }} />
             ) : (
-              <XCircle size={24} style={{ color: '#f87171', flexShrink: 0 }} />
+              <XCircle size={22} style={{ color: 'var(--status-error)', flexShrink: 0 }} />
             )}
             <h3
               style={{
-                fontSize: '1.125rem',
+                fontSize: '1rem',
                 color:
                   checkInResult.type === 'success'
-                    ? '#34d399'
+                    ? 'var(--status-success)'
                     : checkInResult.type === 'warning'
-                    ? '#fbbf24'
-                    : '#f87171',
+                    ? 'var(--status-warning)'
+                    : 'var(--status-error)',
               }}
             >
               {checkInResult.type === 'success'
                 ? 'Check-In Approved'
                 : checkInResult.type === 'warning'
-                ? 'Duplicate Check-In Detected'
-                : 'Validation Rejected'}
+                ? 'Duplicate Ticket Scanned'
+                : 'Ticket Validation Rejected'}
             </h3>
           </div>
 
-          <p style={{ fontSize: '0.9375rem', color: '#f8fafc', marginLeft: '2.25rem' }}>
+          <p style={{ fontSize: '0.875rem', color: 'var(--text-primary)', marginLeft: '2rem' }}>
             {checkInResult.message}
           </p>
 
           {checkInResult.details?.attendeeName && (
-            <div style={{ marginLeft: '2.25rem', marginTop: '0.5rem', fontSize: '0.875rem', display: 'flex', flexWrap: 'wrap', gap: '1rem', color: 'var(--text-secondary)' }}>
+            <div style={{ marginLeft: '2rem', marginTop: '0.35rem', fontSize: '0.8125rem', display: 'flex', flexWrap: 'wrap', gap: '1rem', color: 'var(--text-secondary)' }}>
               <div><strong>Attendee:</strong> {checkInResult.details.attendeeName}</div>
-              <div><strong>Ticket:</strong> <code>{checkInResult.details.ticketId}</code></div>
+              <div><strong>Ticket Ref:</strong> <code>{checkInResult.details.ticketId}</code></div>
               {checkInResult.details.checkedInAt && (
                 <div><strong>Timestamp:</strong> {new Date(checkInResult.details.checkedInAt).toLocaleTimeString()}</div>
               )}
@@ -310,15 +313,14 @@ export default function CoordinatorCheckinPage() {
         </div>
       )}
 
-      {/* Content depending on Active Tab */}
+      {/* Tab Panels */}
       {activeTab === 'CAMERA' ? (
         <div>
           {checkingIn && (
-            <div style={{ textAlign: 'center', marginBottom: '1rem', color: 'var(--accent-primary)', fontWeight: 600 }}>
-              Verifying scanned ticket with backend...
+            <div style={{ textAlign: 'center', marginBottom: '0.85rem', color: 'var(--accent-pink)', fontSize: '0.875rem', fontWeight: 600 }}>
+              Verifying ticket with backend...
             </div>
           )}
-          {/* QR Scanner Component with camera stream cleanup & manual fallback */}
           <QrScanner
             onScanSuccess={(scannedTicketId) => {
               if (!checkingIn) {
@@ -330,12 +332,12 @@ export default function CoordinatorCheckinPage() {
         </div>
       ) : (
         /* Manual Attendee & Ticket Lookup */
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          {/* Direct Ticket ID verification box */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+          {/* Quick Ticket ID input */}
           <div className="card" style={{ padding: '1.25rem' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <ShieldCheck size={18} style={{ color: 'var(--accent-primary)' }} />
-              Quick Check-in by Ticket ID
+            <h3 style={{ fontSize: '0.9375rem', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+              <ShieldCheck size={16} style={{ color: 'var(--accent-pink)' }} />
+              Direct Check-in by Ticket Reference
             </h3>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <input
@@ -359,8 +361,8 @@ export default function CoordinatorCheckinPage() {
 
           {/* Attendee search box */}
           <div className="card" style={{ padding: '1.25rem' }}>
-            <h3 style={{ fontSize: '1rem', marginBottom: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <Search size={18} style={{ color: 'var(--accent-secondary)' }} />
+            <h3 style={{ fontSize: '0.9375rem', marginBottom: '0.65rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+              <Search size={16} style={{ color: 'var(--accent-orange)' }} />
               Lookup Registered Attendees
             </h3>
             <input
@@ -375,11 +377,11 @@ export default function CoordinatorCheckinPage() {
             {attendeesLoading ? (
               <LoadingSpinner message="Searching registered attendees..." />
             ) : attendees.length === 0 ? (
-              <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '1.5rem 0' }}>
+              <p style={{ textAlign: 'center', color: 'var(--text-muted)', padding: '1.5rem 0', fontSize: '0.875rem' }}>
                 No attendees found matching "{searchQuery}".
               </p>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', maxHeight: '420px', overflowY: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '420px', overflowY: 'auto' }}>
                 {attendees.map((a) => (
                   <div
                     key={a.ticketId}
@@ -387,21 +389,21 @@ export default function CoordinatorCheckinPage() {
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
-                      padding: '0.875rem 1rem',
-                      background: 'rgba(15, 23, 42, 0.7)',
-                      borderRadius: 'var(--radius-md)',
+                      padding: '0.75rem 0.85rem',
+                      background: '#14151B',
+                      borderRadius: 'var(--radius-sm)',
                       border: '1px solid var(--border-subtle)',
                     }}
                   >
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.9375rem' }}>{a.attendeeName}</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{a.attendeeName}</div>
                       <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>{a.attendeeEmail}</div>
-                      <div style={{ color: 'var(--text-muted)', fontSize: '0.6875rem', fontFamily: 'monospace', marginTop: '0.2rem' }}>
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.6875rem', fontFamily: 'monospace', marginTop: '0.15rem' }}>
                         ID: {a.ticketId}
                       </div>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                       <StatusBadge status={a.status} />
                       {a.status !== 'CHECKED_IN' && a.status !== 'CANCELLED' && (
                         <button

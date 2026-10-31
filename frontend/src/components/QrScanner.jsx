@@ -8,21 +8,19 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
   const [permissionDenied, setPermissionDenied] = useState(false);
   const [cameras, setCameras] = useState([]);
   const [selectedCameraId, setSelectedCameraId] = useState('');
-  const scannerRef = useRef(null);
   const html5QrCodeRef = useRef(null);
   const isMountedRef = useRef(true);
 
   // Initialize and discover available video cameras
   useEffect(() => {
     isMountedRef.current = true;
-    const scannerElementId = 'reader-viewport';
 
     Html5Qrcode.getCameras()
       .then((devices) => {
         if (!isMountedRef.current) return;
         if (devices && devices.length > 0) {
           setCameras(devices);
-          // Prefer back camera if found
+          // Prefer back camera if found for mobile venue scanning
           const backCam = devices.find(
             (d) => d.label.toLowerCase().includes('back') || d.label.toLowerCase().includes('environment')
           );
@@ -36,7 +34,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         console.warn('Camera access error or permission denied:', err);
         setPermissionDenied(true);
         setErrorMessage(
-          'Camera access was denied or is unavailable. Please check your browser permissions or use manual lookup.'
+          'Camera access was denied or is unavailable. Please verify browser permissions or switch to manual lookup.'
         );
       });
 
@@ -57,14 +55,14 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
   const startScanner = async (cameraId) => {
     try {
       setErrorMessage(null);
-      await stopScanner(); // Stop any running instance first
+      await stopScanner(); // Stop running instance before re-initializing
 
       const html5QrCode = new Html5Qrcode('reader-viewport');
       html5QrCodeRef.current = html5QrCode;
 
       const config = {
         fps: 10,
-        qrbox: { width: 250, height: 250 },
+        qrbox: { width: 240, height: 240 },
         aspectRatio: 1.0,
       };
 
@@ -72,13 +70,12 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         cameraId,
         config,
         (decodedText) => {
-          // Trigger scan callback with the scanned opaque ticket ID
           if (decodedText) {
             onScanSuccess(decodedText.trim());
           }
         },
-        (scanError) => {
-          // Ignore frequent frame-level parse errors while scanning
+        () => {
+          // Ignore transient per-frame decode misses
         }
       );
 
@@ -92,7 +89,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         setScannerActive(false);
         setPermissionDenied(true);
         setErrorMessage(
-          'Failed to initialize camera video stream. Permissions might be denied or camera is in use by another app.'
+          'Failed to initialize camera video stream. Permissions might be denied or the camera is occupied by another application.'
         );
       }
     }
@@ -105,7 +102,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
         html5QrCodeRef.current.clear();
       }
     } catch (err) {
-      console.warn('Error stopping QR scanner:', err);
+      console.warn('Notice stopping QR scanner:', err);
     } finally {
       if (isMountedRef.current) {
         setScannerActive(false);
@@ -116,9 +113,9 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
   return (
     <div className="card" style={{ maxWidth: '520px', margin: '0 auto', textAlign: 'center' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
-        <h3 style={{ fontSize: '1.125rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <Camera size={20} style={{ color: 'var(--accent-primary)' }} />
-          Live Camera Scanner
+        <h3 style={{ fontSize: '1.05rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+          <Camera size={18} style={{ color: 'var(--accent-pink)' }} />
+          Live Camera Viewfinder
         </h3>
 
         {cameras.length > 1 && (
@@ -126,7 +123,7 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
             value={selectedCameraId}
             onChange={(e) => setSelectedCameraId(e.target.value)}
             className="form-select"
-            style={{ width: 'auto', padding: '0.35rem 0.75rem', fontSize: '0.8125rem' }}
+            style={{ width: 'auto', padding: '0.25rem 0.65rem', fontSize: '0.75rem' }}
           >
             {cameras.map((c) => (
               <option key={c.id} value={c.id}>
@@ -141,43 +138,43 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
       <div
         style={{
           position: 'relative',
-          borderRadius: 'var(--radius-lg)',
+          borderRadius: 'var(--radius-sm)',
           overflow: 'hidden',
-          background: '#030712',
-          border: '2px solid rgba(99, 102, 241, 0.3)',
-          minHeight: '280px',
+          background: '#0D0E12',
+          border: '1px solid var(--border-default)',
+          minHeight: '270px',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        <div id="reader-viewport" style={{ width: '100%', minHeight: '280px' }} />
+        <div id="reader-viewport" style={{ width: '100%', minHeight: '270px' }} />
 
         {!scannerActive && !errorMessage && (
           <div style={{ position: 'absolute', color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
-            <CameraOff size={36} />
-            <span style={{ fontSize: '0.875rem' }}>Initializing optical camera...</span>
+            <CameraOff size={32} />
+            <span style={{ fontSize: '0.8125rem' }}>Initializing optical camera stream...</span>
           </div>
         )}
       </div>
 
-      {/* Permission Denied or Camera Error banner with prominent Manual Lookup fallback */}
+      {/* Error banner with fallback to Manual Lookup */}
       {errorMessage && (
         <div
           style={{
             marginTop: '1rem',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
-            background: 'rgba(239, 68, 68, 0.12)',
-            border: '1px solid rgba(239, 68, 68, 0.3)',
+            padding: '0.85rem',
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--status-error-bg)',
+            border: '1px solid var(--status-error-border)',
             textAlign: 'left',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fca5a5', fontWeight: 600, fontSize: '0.875rem' }}>
-            <AlertCircle size={18} />
-            <span>Camera Unavailable</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--status-error)', fontWeight: 600, fontSize: '0.8125rem' }}>
+            <AlertCircle size={16} />
+            <span>Camera Access Notice</span>
           </div>
-          <p style={{ fontSize: '0.8125rem', color: '#fecaca', marginTop: '0.25rem' }}>
+          <p style={{ fontSize: '0.75rem', color: '#FCA5A5', marginTop: '0.25rem' }}>
             {errorMessage}
           </p>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
@@ -187,34 +184,34 @@ export default function QrScanner({ onScanSuccess, onSwitchToManual }) {
                 className="btn btn-sm btn-primary"
                 style={{ flex: 1 }}
               >
-                <Search size={14} />
-                Switch to Manual Lookup
+                <Search size={13} />
+                <span>Switch to Manual Lookup</span>
               </button>
             )}
             <button
               onClick={() => selectedCameraId && startScanner(selectedCameraId)}
               className="btn btn-sm btn-secondary"
             >
-              <RefreshCw size={14} />
-              Retry Camera
+              <RefreshCw size={13} />
+              <span>Retry</span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Instructions & Manual Fallback Button */}
-      <div style={{ marginTop: '1.25rem', display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-        <p style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)' }}>
-          Position the attendee’s digital QR ticket within the camera viewfinder. The ticket ID will be validated automatically.
+      {/* Manual lookup prompt */}
+      <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+          Position attendee QR pass in front of lens. Scans are submitted and validated automatically.
         </p>
         {onSwitchToManual && (
           <button
             onClick={onSwitchToManual}
-            className="btn btn-outline btn-sm"
+            className="btn btn-secondary btn-sm"
             style={{ alignSelf: 'center' }}
           >
-            <Search size={14} />
-            Having trouble? Use Manual Lookup
+            <Search size={13} />
+            <span>Camera unavailable? Use Manual Attendee Lookup</span>
           </button>
         )}
       </div>
