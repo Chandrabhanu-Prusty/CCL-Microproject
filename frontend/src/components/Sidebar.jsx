@@ -60,7 +60,7 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
           <span>My RSVPs</span>
         </NavLink>
 
-        {/* Management & Staff Navigation - ONLY visible to authorized roles, NEVER attendees */}
+        {/* Management & Staff Navigation - ONLY visible to authorized roles, NEVER pure attendees */}
         {(isOrganizer || isCoordinator) && (
           <>
             <span className="sidebar-section-title" style={{ marginTop: '0.5rem' }}>Management</span>
@@ -77,8 +77,8 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
               </NavLink>
             )}
 
-            {/* Coordinator & Organizer: Check-in Workspace */}
-            {(isCoordinator || isOrganizer) && (
+            {/* Event Check-in: Only users with live assigned events (Coordinator delegation) */}
+            {isCoordinator && (
               <NavLink 
                 to="/checkin" 
                 onClick={onClose}
@@ -117,7 +117,9 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
               </div>
               <div className="sidebar-user-info">
                 <span className="sidebar-user-name">{user?.name || 'Campus Attendee'}</span>
-                <span className="sidebar-user-role">{role}</span>
+                <span className="sidebar-user-role">
+                  {role}{isCoordinator && role !== 'ORGANIZER' ? ' (Staff)' : ''}
+                </span>
               </div>
               <button
                 onClick={() => {
@@ -141,9 +143,9 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
                   <span>Demo Persona</span>
                 </div>
                 <select
-                  value={role}
+                  value={isOrganizer ? 'ORGANIZER' : isCoordinator ? 'COORDINATOR' : 'ATTENDEE'}
                   onChange={handleRoleChange}
-                  aria-label="Demo Role Switcher"
+                  aria-label="Demo Persona Switcher"
                   style={{
                     background: 'transparent',
                     border: 'none',
@@ -156,7 +158,7 @@ export default function Sidebar({ isOpen, onClose, onOpenHelp }) {
                 >
                   <option value="ATTENDEE" style={{ background: '#1B1D24', color: '#fff' }}>Attendee (Chandrabhanu)</option>
                   <option value="ORGANIZER" style={{ background: '#1B1D24', color: '#fff' }}>Organizer (Neilsen)</option>
-                  <option value="COORDINATOR" style={{ background: '#1B1D24', color: '#fff' }}>Coordinator (Preeti)</option>
+                  <option value="COORDINATOR" style={{ background: '#1B1D24', color: '#fff' }}>Coordinator (Preeti - Assigned)</option>
                 </select>
               </div>
             )}

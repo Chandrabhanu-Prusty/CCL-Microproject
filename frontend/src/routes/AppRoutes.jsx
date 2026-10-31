@@ -32,23 +32,47 @@ function ProtectedRoute({ children }) {
 }
 
 /**
- * Role-Based Route Guard.
- * Restricts access to specified roles. Unauthorized users are redirected to fallbackPath.
+ * Organizer Route Guard.
+ * Restricts access strictly to accounts with global role ORGANIZER.
  */
-function RoleRoute({ allowedRoles, fallbackPath = '/events', children }) {
-  const { isAuthenticated, role, loading } = useAuth();
+function OrganizerRoute({ children }) {
+  const { isAuthenticated, isOrganizer, loading } = useAuth();
   const location = useLocation();
 
   if (loading) {
-    return <LoadingSpinner message="Checking permissions..." />;
+    return <LoadingSpinner message="Verifying organizer privileges..." />;
   }
 
   if (!isAuthenticated) {
     return <Navigate to="/auth" state={{ from: location.pathname }} replace />;
   }
 
-  if (!allowedRoles.includes(role)) {
-    return <Navigate to={fallbackPath} replace />;
+  if (!isOrganizer) {
+    return <Navigate to="/events" replace />;
+  }
+
+  return children;
+}
+
+/**
+ * Staff Check-in Route Guard.
+ * Restricts access to users who hold live event staff check-in assignments (or mock staff).
+ */
+function CheckinRoute({ children }) {
+  const { isAuthenticated, isCoordinator, loading } = useAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return <LoadingSpinner message="Verifying check-in staff authorization..." />;
+  }
+
+  if (!isAuthenticated) {
+    return <Navigate to="/auth" state={{ from: location.pathname }} replace />;
+  }
+
+  if (!isCoordinator) {
+    // If user has no assigned events, redirect to events catalog
+    return <Navigate to="/events" replace />;
   }
 
   return children;
@@ -59,15 +83,15 @@ function RoleRoute({ allowedRoles, fallbackPath = '/events', children }) {
  * If user is already signed in, redirect them directly based on role.
  */
 function GuestRoute({ children }) {
-  const { isAuthenticated, role, loading } = useAuth();
+  const { isAuthenticated, isOrganizer, isCoordinator, loading } = useAuth();
 
   if (loading) {
     return <LoadingSpinner message="Checking session..." />;
   }
 
   if (isAuthenticated) {
-    if (role === 'ORGANIZER') return <Navigate to="/organizer" replace />;
-    if (role === 'COORDINATOR') return <Navigate to="/checkin" replace />;
+    if (isOrganizer) return <Navigate to="/organizer" replace />;
+    if (isCoordinator) return <Navigate to="/checkin" replace />;
     return <Navigate to="/events" replace />;
   }
 
@@ -75,12 +99,12 @@ function GuestRoute({ children }) {
 }
 
 export default function AppRoutes() {
-  const { isAuthenticated, role, loading } = useAuth();
+  const { isAuthenticated, isOrganizer, isCoordinator, loading } = useAuth();
 
   const getHomeRedirect = () => {
     if (!isAuthenticated) return '/auth';
-    if (role === 'ORGANIZER') return '/organizer';
-    if (role === 'COORDINATOR') return '/checkin';
+    if (isOrganizer) return '/organizer';
+    if (isCoordinator) return '/checkin';
     return '/events';
   };
 
@@ -109,7 +133,7 @@ export default function AppRoutes() {
           }
         />
 
-        {/* Campus Event Discovery (All authenticated users: Attendee, Organizer, Coordinator) */}
+        {/* Campus Event Discovery (All authenticated users: Attendee, Organizer) */}
         <Route
           path="events"
           element={
@@ -145,31 +169,31 @@ export default function AppRoutes() {
           }
         />
 
-        {/* Organizer Dashboard (Strictly ORGANIZER role only) */}
+        {/* Organizer Dashboard (Strictly ORGANIZER global role only) */}
         <Route
           path="organizer"
           element={
-            <RoleRoute allowedRoles={['ORGANIZER']} fallbackPath="/events">
+            <OrganizerRoute>
               <OrganizerDashboardPage />
-            </RoleRoute>
+            </OrganizerRoute>
           }
         />
 
-        {/* Coordinator Check-in Workspace (COORDINATOR and ORGANIZER roles only) */}
+        {/* Coordinator Check-in Workspace (Live event assignments required) */}
         <Route
           path="checkin"
           element={
-            <RoleRoute allowedRoles={['COORDINATOR', 'ORGANIZER']} fallbackPath="/events">
+            <CheckinRoute>
               <CoordinatorCheckinPage />
-            </RoleRoute>
+            </CheckinRoute>
           }
         />
         <Route
           path="checkin/:eventId"
           element={
-            <RoleRoute allowedRoles={['COORDINATOR', 'ORGANIZER']} fallbackPath="/events">
+            <CheckinRoute>
               <CoordinatorCheckinPage />
-            </RoleRoute>
+            </CheckinRoute>
           }
         />
 

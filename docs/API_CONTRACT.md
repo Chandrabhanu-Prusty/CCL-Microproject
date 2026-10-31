@@ -1,34 +1,47 @@
-# API Contract
+# API Contract — Final & Frozen Specification
 
-Base URL: the deployed API Gateway HTTP API URL. Paths below are relative to that URL.
-
-## Conventions
-
-- JSON request and response bodies unless explicitly stated otherwise.
-- Protected requests require standard header: `Authorization: Bearer <JWT>`.
-- New accounts created via public registration strictly default to `ATTENDEE`; privileged roles (`ORGANIZER`, `COORDINATOR`) cannot be self-assigned.
-- Use ISO 8601 UTC timestamp formatting (e.g. `2026-11-15T09:00:00Z`).
-- The backend is the single source of truth for capacities, reservations, and check-in statuses.
-
-## Standard Error Response
-
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "A short, user-safe explanation."
-  }
-}
-```
-
-Common statuses: `200` Success, `201` Created, `400` Bad Request, `401` Unauthorized (missing/invalid token), `403` Forbidden (insufficient role or unassigned event), `404` Not Found, `409` Conflict (duplicate registration, full capacity, or already checked in), `500` Internal Server Error.
+Base URL: the deployed API Gateway HTTP API stage URL. Paths below are relative to that URL.
 
 ---
 
-## Authentication
+## 1. Global Conventions & Standards
 
-### `POST /api/auth/register` — Public
-Registers a new campus user. Always defaults to `ATTENDEE`.
+- **Encoding & Data Format:** UTF-8 JSON request and response payloads.
+- **Stateless Authentication:** Bearer JWT in `Authorization` header: `Authorization: Bearer <token>`.
+- **Global Roles:** Strictly `ATTENDEE` and `ORGANIZER`. `COORDINATOR` is never a global role or JWT claim.
+- **Event Check-in Authorization:** Validated on every staff request against `MarqueEventStaff` table.
+- **Timestamps:** ISO 8601 UTC formatted strings (e.g., `2026-11-15T09:00:00.000Z`).
+- **Standard Success Format:** Direct entity return or standard envelopes: `{ "events": [...] }`, `{ "ticket": {...} }`.
+- **Standard Error Format:**
+  ```json
+  {
+    "error": {
+      "code": "VALIDATION_ERROR",
+      "message": "User-safe explanation of the error condition.",
+      "details": {}
+    }
+  }
+  ```
+
+### HTTP Status Codes
+- `200 OK`: Request succeeded.
+- `201 Created`: Resource successfully created.
+- `400 Bad Request`: Validation failure, missing required fields, or illegal capacity reduction.
+- `401 Unauthorized`: Missing, expired, invalid, or forged Bearer JWT.
+- `403 Forbidden`: Insufficient role or lack of explicit event assignment in `MarqueEventStaff`.
+- `404 Not Found`: Target resource does not exist.
+- `409 Conflict`: Duplicate registration, full capacity race condition, or ticket already checked in.
+- `500 Internal Server Error`: Unhandled server exception.
+
+---
+
+## 2. Authentication Endpoints
+
+### 2.1 Register User Account
+- **HTTP Method:** `POST`
+- **Path:** `/api/auth/register`
+- **Auth Required:** No (Public)
+- **Permissions:** None
 - **Request Body:**
   ```json
   {
@@ -37,130 +50,245 @@ Registers a new campus user. Always defaults to `ATTENDEE`.
     "password": "StrongPassword123!"
   }
   ```
-- **Success `201 Created`:**
+- **Validation Rules:**
+  - `name`: String, 2 to 100 characters.
+  - `email`: Valid email format, max 254 chars. Normalized to lowercase.
+  - `password`: String, minimum 8 characters, at least 1 number or special character.
+  - `role`: Ignored if passed; backend **always** forces `role: "ATTENDEE"`.
+- **Success Response (`201 Created`):**
   ```json
   {
-    "token": "<jwt-token>",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "user": {
-      "userId": "usr-attendee-demo",
+      "userId": "usr-8f3a9e1b2c4d",
       "name": "Chandrabhanu Prusty",
       "email": "chandrabhanu@example.com",
       "role": "ATTENDEE"
     }
   }
   ```
+- **Errors:**
+  - `400 VALIDATION_ERROR`: Invalid format or missing fields.
+  - `409 EMAIL_ALREADY_EXISTS`: An account with this normalized email already exists.
 
-### `POST /api/auth/login` — Public
-Authenticates credentials against bcrypt hash and issues stateless JWT.
+### 2.2 Login User Account
+- **HTTP Method:** `POST`
+- **Path:** `/api/auth/login`
+- **Auth Required:** No (Public)
+- **Permissions:** None
 - **Request Body:**
   ```json
   {
-    "email": "user@example.com",
+    "email": "chandrabhanu@example.com",
     "password": "StrongPassword123!"
   }
   ```
-- **Success `200 OK`:**
+- **Validation Rules:** `email` and `password` required.
+- **Success Response (`200 OK`):**
   ```json
   {
-    "token": "<jwt-token>",
+    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
     "user": {
-      "userId": "usr-id",
-      "name": "Full Name",
-      "email": "user@example.com",
+      "userId": "usr-8f3a9e1b2c4d",
+      "name": "Chandrabhanu Prusty",
+      "email": "chandrabhanu@example.com",
       "role": "ATTENDEE"
     }
   }
   ```
+- **Errors:**
+  - `400 VALIDATION_ERROR`: Missing email or password.
+  - `401 INVALID_CREDENTIALS`: Email not found or bcrypt verification failed.
 
 ---
 
-## Events
+## 3. Events Endpoints
 
-### `GET /api/events` — Public / Protected
-Returns published events list.
-- **Query Params:** `q` (text search), `category` (`Technology`, `Workshop`, `Cultural`, `Academic`, `Sports`).
-- **Success `200 OK`:**
+### 3.1 List Published Events
+- **HTTP Method:** `GET`
+- **Path:** `/api/events`
+- **Auth Required:** No (Public discovery; authenticated users may pass token)
+- **Permissions:** Any
+- **Query Parameters:**
+  - `q` (optional): Case-insensitive text search filtering against event `title` or `venue`.
+  - `category` (optional): Filter by category (`Technology`, `Workshop`, `Cultural`, `Academic`, `Sports`).
+- **Success Response (`200 OK`):**
   ```json
   {
     "events": [
       {
         "eventId": "evt-ccl-hackathon-2026",
-        "title": "Cloud Canvas 2026",
+        "title": "Cloud Canvas 2026: Campus Hackathon",
+        "description": "48-hour premier cloud computing hackathon.",
         "category": "Technology",
-        "startAt": "2026-11-15T09:00:00Z",
-        "venue": "Auditorium, VESIT",
+        "startAt": "2026-11-15T09:00:00.000Z",
+        "endAt": "2026-11-17T17:00:00.000Z",
+        "venue": "Auditorium & Lab 502, VESIT Campus",
         "capacity": 100,
         "confirmedCount": 88,
-        "status": "PUBLISHED"
+        "status": "PUBLISHED",
+        "organizerId": "usr-organizer-01",
+        "bannerUrl": "https://images.unsplash.com/..."
       }
     ]
   }
   ```
 
-### `GET /api/events/{eventId}` — Public / Protected
-Returns single event detail with current capacity metrics.
+### 3.2 Get Event Details
+- **HTTP Method:** `GET`
+- **Path:** `/api/events/{eventId}`
+- **Auth Required:** No (Public)
+- **Path Parameters:** `eventId` (String, required)
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "event": {
+      "eventId": "evt-ccl-hackathon-2026",
+      "title": "Cloud Canvas 2026: Campus Hackathon",
+      "description": "48-hour premier cloud computing hackathon.",
+      "category": "Technology",
+      "startAt": "2026-11-15T09:00:00.000Z",
+      "endAt": "2026-11-17T17:00:00.000Z",
+      "venue": "Auditorium & Lab 502, VESIT Campus",
+      "capacity": 100,
+      "confirmedCount": 88,
+      "status": "PUBLISHED",
+      "organizerId": "usr-organizer-01",
+      "bannerUrl": "https://images.unsplash.com/...",
+      "createdAt": "2026-10-01T10:00:00.000Z"
+    }
+  }
+  ```
+- **Errors:** `404 EVENT_NOT_FOUND`.
 
-### `POST /api/events` — Organizer Only
-Creates a new event owned by the authenticated organizer.
+### 3.3 Create Campus Event
+- **HTTP Method:** `POST`
+- **Path:** `/api/events`
+- **Auth Required:** Yes
+- **Permissions:** Global role `ORGANIZER`
 - **Request Body:**
   ```json
   {
-    "title": "Cloud Canvas 2026",
-    "description": "Hackathon description",
-    "category": "Technology",
-    "startAt": "2026-11-15T09:00:00Z",
-    "endAt": "2026-11-17T17:00:00Z",
-    "venue": "Auditorium & Lab 502",
-    "capacity": 100,
-    "bannerUrl": "https://..."
+    "title": "Zero-to-Production: Full-Stack React & AWS Workshop",
+    "description": "Hands-on practical session building high-performance SPAs.",
+    "category": "Workshop",
+    "startAt": "2026-11-28T14:00:00.000Z",
+    "endAt": "2026-11-28T17:00:00.000Z",
+    "venue": "Seminar Hall B, IT Building",
+    "capacity": 40,
+    "bannerUrl": "https://images.unsplash.com/..."
   }
   ```
+- **Validation Rules:**
+  - `title`, `description`, `venue`, `startAt`: Required strings.
+  - `category`: Must be one of `['Technology', 'Workshop', 'Cultural', 'Academic', 'Sports']`.
+  - `capacity`: Integer $\ge 1$.
+  - `startAt`: Valid future ISO 8601 string.
+- **Success Response (`201 Created`):** Returns created event object with `confirmedCount: 0`, `status: "PUBLISHED"`, and `organizerId` set to authenticated user ID.
+- **Errors:**
+  - `401 UNAUTHORIZED`: Missing/invalid token.
+  - `403 FORBIDDEN`: Caller's global role is not `ORGANIZER`.
+  - `400 VALIDATION_ERROR`: Field validation failed.
 
-### `PATCH /api/events/{eventId}` — Organizer Only (Owner)
-Updates event details. Validates `organizerId === user.userId`. Rejects capacity reduction below current `confirmedCount`.
+### 3.4 Update Event
+- **HTTP Method:** `PATCH`
+- **Path:** `/api/events/{eventId}`
+- **Auth Required:** Yes
+- **Permissions:** Global role `ORGANIZER` AND caller must be the event owner (`event.organizerId === user.userId`)
+- **Request Body:** Partial update fields (`title`, `description`, `category`, `startAt`, `endAt`, `venue`, `capacity`, `bannerUrl`).
+- **Validation Rules:**
+  - If `capacity` is provided, it cannot be less than the current `confirmedCount`.
+- **Success Response (`200 OK`):** Returns updated event object.
+- **Errors:**
+  - `401 UNAUTHORIZED`: Missing/invalid token.
+  - `403 FORBIDDEN`: Caller is not `ORGANIZER` or does not own this event.
+  - `400 INVALID_CAPACITY`: Requested capacity is less than existing confirmed attendees.
+  - `404 EVENT_NOT_FOUND`: Event does not exist.
 
 ---
 
-## Event Staff & Coordinator Delegation
+## 4. Event Staff & Coordinator Delegation Endpoints
 
-### `GET /api/events/{eventId}/staff` — Organizer Only (Owner)
-Lists all coordinators assigned to this specific event.
-- **Success `200 OK`:**
+### 4.1 List Assigned Coordinators for Event
+- **HTTP Method:** `GET`
+- **Path:** `/api/events/{eventId}/staff`
+- **Auth Required:** Yes
+- **Permissions:** Global role `ORGANIZER` AND owner of `eventId`
+- **Success Response (`200 OK`):**
   ```json
   {
     "staff": [
       {
         "eventId": "evt-ccl-hackathon-2026",
-        "userId": "usr-coordinator-01",
-        "email": "coordinator.preeti@example.com",
+        "userId": "usr-coord-01",
+        "email": "preeti.coord@example.com",
         "name": "Preeti Coordinator",
-        "role": "COORDINATOR",
-        "assignedAt": "2026-10-12T10:00:00Z",
+        "permission": "CHECK_IN",
+        "assignedAt": "2026-10-12T10:00:00.000Z",
         "assignedBy": "usr-organizer-01"
       }
     ]
   }
   ```
+- **Errors:** `401 UNAUTHORIZED`, `403 FORBIDDEN` (not event owner), `404 EVENT_NOT_FOUND`.
 
-### `POST /api/events/{eventId}/staff` — Organizer Only (Owner)
-Assigns a coordinator to this specific event by campus email.
+### 4.2 Assign Coordinator to Event
+- **HTTP Method:** `POST`
+- **Path:** `/api/events/{eventId}/staff`
+- **Auth Required:** Yes
+- **Permissions:** Global role `ORGANIZER` AND owner of `eventId`
 - **Request Body:**
   ```json
   {
-    "email": "coordinator.preeti@example.com",
-    "role": "COORDINATOR"
+    "email": "preeti.coord@example.com"
   }
   ```
-- **Success `201 Created`:** Returns created `MarqueEventStaff` record.
-- **Errors:** `400 INVALID_EMAIL`, `403 FORBIDDEN` (not event owner), `409 ALREADY_ASSIGNED`.
+- **Validation Rules:**
+  - `email`: Required valid email address.
+  - Look up target user in `MarqueUsers` by normalized email. User must exist.
+  - Does NOT alter the user's global role in `MarqueUsers`.
+  - Inserts staff record into `MarqueEventStaff` with `permission: "CHECK_IN"`.
+- **Success Response (`201 Created`):**
+  ```json
+  {
+    "assignment": {
+      "eventId": "evt-ccl-hackathon-2026",
+      "userId": "usr-coord-01",
+      "email": "preeti.coord@example.com",
+      "name": "Preeti Coordinator",
+      "permission": "CHECK_IN",
+      "assignedAt": "2026-10-12T10:00:00.000Z",
+      "assignedBy": "usr-organizer-01"
+    }
+  }
+  ```
+- **Errors:**
+  - `400 USER_NOT_FOUND`: No registered account exists with this email address.
+  - `403 FORBIDDEN`: Caller does not own this event.
+  - `409 ALREADY_ASSIGNED`: User is already an active coordinator for this event.
 
-### `DELETE /api/events/{eventId}/staff/{userId}` — Organizer Only (Owner)
-Revokes coordinator check-in authorization for this specific event.
-- **Success `200 OK`:** `{ "message": "Coordinator removed successfully." }`
+### 4.3 Revoke Coordinator Assignment
+- **HTTP Method:** `DELETE`
+- **Path:** `/api/events/{eventId}/staff/{userId}`
+- **Auth Required:** Yes
+- **Permissions:** Global role `ORGANIZER` AND owner of `eventId`
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "message": "Coordinator assignment successfully revoked."
+  }
+  ```
+- **Errors:** `401 UNAUTHORIZED`, `403 FORBIDDEN` (not event owner), `404 STAFF_NOT_FOUND`.
 
-### `GET /api/me/assigned-events` — Coordinator / Organizer
-Returns only the events that the authenticated user is authorized to check in (either through assignment in `MarqueEventStaff` or event ownership).
-- **Success `200 OK`:**
+### 4.4 List Assigned Events for Current User
+- **HTTP Method:** `GET`
+- **Path:** `/api/me/assigned-events`
+- **Auth Required:** Yes
+- **Permissions:** Any authenticated user (`ATTENDEE` or `ORGANIZER`)
+- **Behavior:**
+  - Queries `MarqueEventStaff` GSI `user-assigned-events-index` for `userId = caller.userId`.
+  - Also includes events owned by the user if caller is an `ORGANIZER` who assigned themselves.
+- **Success Response (`200 OK`):**
   ```json
   {
     "events": [
@@ -168,6 +296,7 @@ Returns only the events that the authenticated user is authorized to check in (e
         "eventId": "evt-ccl-hackathon-2026",
         "title": "Cloud Canvas 2026: Campus Hackathon",
         "venue": "Auditorium & Lab 502, VESIT Campus",
+        "startAt": "2026-11-15T09:00:00.000Z",
         "confirmedCount": 88
       }
     ]
@@ -176,55 +305,261 @@ Returns only the events that the authenticated user is authorized to check in (e
 
 ---
 
-## RSVP, Waitlist & Tickets
+## 5. RSVP & Waitlist Endpoints
 
-### `POST /api/events/{eventId}/rsvp` — Attendee
-Registers user for event.
-- **Capacity Available:** Returns `{ "status": "CONFIRMED", "rsvpId": "rsvp-...", "ticketId": "tkt-..." }`.
-- **Capacity Full:** Returns `{ "status": "WAITLISTED", "rsvpId": "rsvp-...", "queuePosition": 1 }`.
-- **Duplicate Registration:** Returns `409 Conflict` (`DUPLICATE_REGISTRATION`).
+### 5.1 Register RSVP / Join Waitlist
+- **HTTP Method:** `POST`
+- **Path:** `/api/events/{eventId}/rsvp`
+- **Auth Required:** Yes
+- **Permissions:** Any authenticated user
+- **Request Body:** Empty `{}`
+- **Behavior & Atomic Outcomes:**
+  - If user already holds an active `CONFIRMED` or `WAITLISTED` registration, reject with `409 DUPLICATE_REGISTRATION`.
+  - **Seat Available (`confirmedCount < capacity`):**
+    - Atomically increments `confirmedCount` by 1.
+    - Creates `MarqueRSVPs` record with `status: "CONFIRMED"` and generated opaque `ticketId`.
+    - Creates `MarqueTickets` record with `status: "ACTIVE"`.
+    - Returns `201 Created`:
+      ```json
+      {
+        "status": "CONFIRMED",
+        "rsvpId": "rsvp-9a8b7c6d",
+        "ticketId": "tkt-8f3a9e1b2c4d",
+        "message": "Registration confirmed. Your digital pass is available."
+      }
+      ```
+  - **Seat Full (`confirmedCount >= capacity`):**
+    - Inserts user into `MarqueWaitlist` with queue key `<ISO8601_NOW>#<userId>`.
+    - Creates `MarqueRSVPs` record with `status: "WAITLISTED"`.
+    - Determines `queuePosition` via strongly consistent base table count.
+    - Returns `200 OK` (Note: waitlisting is an authorized, expected flow, not an error):
+      ```json
+      {
+        "status": "WAITLISTED",
+        "rsvpId": "rsvp-9a8b7c6d",
+        "queuePosition": 3,
+        "message": "Event is currently full. You have been placed in the FIFO waitlist."
+      }
+      ```
+- **Errors:**
+  - `401 UNAUTHORIZED`: Missing token.
+  - `404 EVENT_NOT_FOUND`: Invalid eventId.
+  - `409 DUPLICATE_REGISTRATION`: Caller is already registered or waitlisted.
 
-### `DELETE /api/events/{eventId}/rsvp` — Attendee
-Cancels active registration. If confirmed, automatically triggers FIFO promotion of the earliest waitlisted participant.
+### 5.2 Cancel RSVP Registration
+- **HTTP Method:** `DELETE`
+- **Path:** `/api/events/{eventId}/rsvp`
+- **Auth Required:** Yes
+- **Permissions:** Any authenticated attendee (cancels own registration)
+- **Behavior & Atomic Outcomes:**
+  - If caller holds a `CONFIRMED` RSVP:
+    - Atomically cancels the current RSVP and associated `MarqueTickets` entry.
+    - Queries `MarqueWaitlist` for oldest `WAITING` entry (`ScanIndexForward = true`, `Limit = 1`).
+    - **If waitlist candidate exists:** Promotes candidate to `CONFIRMED`, generates new active ticket, marks queue entry `PROMOTED`. Capacity count remains steady.
+    - **If waitlist is empty:** Atomically decrements `confirmedCount` by 1.
+  - If caller holds a `WAITLISTED` RSVP:
+    - Cancels waitlist queue item and sets RSVP to `CANCELLED`.
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "message": "Registration successfully cancelled.",
+    "promotedAttendee": "Aarav Sharma"
+  }
+  ```
+- **Errors:** `401 UNAUTHORIZED`, `404 RSVP_NOT_FOUND`.
 
-### `GET /api/me/rsvps` — Attendee
-Returns the caller's registrations with statuses (`CONFIRMED`, `WAITLISTED`, `CANCELLED`), waitlist queue positions, and opaque ticket IDs.
-
-### `GET /api/tickets/{ticketId}` — Ticket Owner / Assigned Staff
-Returns ticket details. Attendees can only view their own tickets; staff can inspect tickets belonging to their assigned events.
+### 5.3 Get Current User Registrations
+- **HTTP Method:** `GET`
+- **Path:** `/api/me/rsvps`
+- **Auth Required:** Yes
+- **Permissions:** Any authenticated user
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "rsvps": [
+      {
+        "rsvpId": "rsvp-9a8b7c6d",
+        "eventId": "evt-ccl-hackathon-2026",
+        "status": "CONFIRMED",
+        "ticketId": "tkt-8f3a9e1b2c4d",
+        "createdAt": "2026-10-18T10:00:00.000Z",
+        "event": {
+          "title": "Cloud Canvas 2026: Campus Hackathon",
+          "venue": "Auditorium & Lab 502, VESIT Campus",
+          "startAt": "2026-11-15T09:00:00.000Z"
+        }
+      }
+    ]
+  }
+  ```
 
 ---
 
-## Venue Check-in & Attendees
+## 6. Tickets & Digital Pass Endpoints
 
-### `GET /api/events/{eventId}/attendees?q={query}` — Assigned Staff / Event Owner
-Search attendees by name, email, or ticket code.
-- **Enforcement:** Caller must be event owner OR listed in `MarqueEventStaff` for this `eventId`. Unauthorized users receive `403 Forbidden`.
+### 6.1 Get Ticket Details
+- **HTTP Method:** `GET`
+- **Path:** `/api/tickets/{ticketId}`
+- **Auth Required:** Yes
+- **Permissions:** Ticket owner only (`ticket.attendeeId === user.userId`)
+- **Security Rule:** Event check-in staff do NOT use this endpoint; staff must use the attendee search or check-in verification endpoints.
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "ticket": {
+      "ticketId": "tkt-8f3a9e1b2c4d",
+      "eventId": "evt-ccl-hackathon-2026",
+      "attendeeId": "usr-attendee-demo",
+      "attendeeName": "Chandrabhanu Prusty",
+      "attendeeEmail": "chandrabhanu@example.com",
+      "eventTitle": "Cloud Canvas 2026: Campus Hackathon",
+      "eventVenue": "Auditorium & Lab 502, VESIT Campus",
+      "eventStartAt": "2026-11-15T09:00:00.000Z",
+      "status": "ACTIVE",
+      "issuedAt": "2026-10-18T10:00:00.000Z",
+      "checkedInAt": null
+    }
+  }
+  ```
+- **Errors:**
+  - `401 UNAUTHORIZED`: Missing token.
+  - `403 FORBIDDEN`: Caller is not the ticket owner.
+  - `404 TICKET_NOT_FOUND`: Invalid ticket reference.
 
-### `POST /api/events/{eventId}/check-in` — Assigned Staff / Event Owner
-Processes single-use check-in for an attendee ticket.
+---
+
+## 7. Venue Check-in & Attendee Search Endpoints
+
+### 7.1 Search Event Attendees for Check-in
+- **HTTP Method:** `GET`
+- **Path:** `/api/events/{eventId}/attendees`
+- **Auth Required:** Yes
+- **Permissions:** Event owner (`ORGANIZER`) OR explicit check-in staff in `MarqueEventStaff`
+- **Query Parameters:**
+  - `q` (required for coordinators, min 2 chars): Search term matching name, email, or ticket ID.
+  - For organizers, `q` is optional (allows full roster inspection).
+- **Behavior:**
+  - Organizers receive full attendee records.
+  - Coordinators receive minimal fields required for verification (`ticketId`, `attendeeName`, masked email, `status`).
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "attendees": [
+      {
+        "ticketId": "tkt-8f3a9e1b2c4d",
+        "attendeeName": "Chandrabhanu Prusty",
+        "attendeeEmail": "ch***@example.com",
+        "status": "ACTIVE",
+        "checkedInAt": null
+      }
+    ]
+  }
+  ```
+- **Errors:**
+  - `400 QUERY_REQUIRED`: Coordinators must supply `q` parameter of at least 2 characters.
+  - `401 UNAUTHORIZED`: Missing token.
+  - `403 FORBIDDEN`: Caller is not authorized for check-in on this event.
+
+### 7.2 Execute Single-Use Ticket Check-in
+- **HTTP Method:** `POST`
+- **Path:** `/api/events/{eventId}/check-in`
+- **Auth Required:** Yes
+- **Permissions:** Event owner (`ORGANIZER`) OR explicit staff assignment in `MarqueEventStaff`
 - **Request Body:**
   ```json
   {
     "ticketId": "tkt-8f3a9e1b2c4d"
   }
   ```
-- **Validation Rules:**
-  1. Caller must have check-in permissions for this `eventId` (`MarqueEventStaff` or event owner). Attendees are rejected with `403 FORBIDDEN`.
-  2. Ticket must exist and belong to `eventId`.
-  3. Ticket status must be `ACTIVE`.
-  4. If status is `CHECKED_IN`, returns `409 Conflict` (`ALREADY_CHECKED_IN`).
-- **Success `200 OK`:**
+- **Atomic Validation & Idempotency Rules:**
+  1. Caller verified in `MarqueEventStaff` for `eventId` (or owns `eventId`). Attendees rejected with `403 FORBIDDEN`.
+  2. Ticket exists and matches `ticket.eventId === eventId`.
+  3. Ticket status must be strictly `ACTIVE`.
+  4. Conditional update transitions ticket to `CHECKED_IN`, recording `checkedInAt` and `checkedInBy`.
+- **Success Response (`200 OK`):**
   ```json
   {
     "status": "CHECKED_IN",
     "ticketId": "tkt-8f3a9e1b2c4d",
     "attendeeName": "Chandrabhanu Prusty",
     "attendeeEmail": "chandrabhanu@example.com",
-    "checkedInAt": "2026-11-15T09:15:00Z",
+    "checkedInAt": "2026-11-15T09:15:00.000Z",
     "checkedInBy": "Preeti Coordinator"
   }
   ```
+- **Errors:**
+  - `400 INVALID_EVENT`: Ticket belongs to a different event.
+  - `400 TICKET_INACTIVE`: Ticket is cancelled or expired.
+  - `403 FORBIDDEN`: Caller is not assigned check-in staff for this event.
+  - `404 TICKET_NOT_FOUND`: Ticket reference does not exist.
+  - `409 ALREADY_CHECKED_IN`:
+    ```json
+    {
+      "error": {
+        "code": "ALREADY_CHECKED_IN",
+        "message": "Ticket already checked in at 9:15 AM by Preeti Coordinator."
+      }
+    }
+    ```
 
-### `GET /api/events/{eventId}/stats` — Event Owner Only
-Returns live attendance turnout metrics: `capacity`, `confirmedCount`, `waitlistCount`, `checkedInCount`, `attendancePercentage`.
+---
+
+## 8. Statistics Endpoints
+
+### 8.1 Full Organizer Event Analytics
+- **HTTP Method:** `GET`
+- **Path:** `/api/events/{eventId}/stats`
+- **Auth Required:** Yes
+- **Permissions:** Event owner (`ORGANIZER`) only
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "capacity": 100,
+    "confirmedCount": 88,
+    "waitlistCount": 12,
+    "checkedInCount": 65,
+    "attendancePercentage": 74
+  }
+  ```
+- **Errors:** `401 UNAUTHORIZED`, `403 FORBIDDEN` (coordinators and attendees blocked).
+
+### 8.2 Coordinator Check-in Summary
+- **HTTP Method:** `GET`
+- **Path:** `/api/events/{eventId}/checkin-summary`
+- **Auth Required:** Yes
+- **Permissions:** Assigned check-in staff (`MarqueEventStaff`) or event owner
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "confirmedCount": 88,
+    "checkedInCount": 65
+  }
+  ```
+
+---
+
+## 9. S3 Banner Uploads Endpoint
+
+### 9.1 Presigned Banner Upload URL
+- **HTTP Method:** `POST`
+- **Path:** `/api/uploads/banner-url`
+- **Auth Required:** Yes
+- **Permissions:** Global role `ORGANIZER`
+- **Request Body:**
+  ```json
+  {
+    "fileName": "hackathon-banner.png",
+    "contentType": "image/png"
+  }
+  ```
+- **Validation Rules:**
+  - `contentType` must be one of `image/jpeg`, `image/png`, `image/webp`.
+  - Enforce max file size 5MB in policy.
+- **Success Response (`200 OK`):**
+  ```json
+  {
+    "uploadUrl": "https://marque-banners-xxx.s3.amazonaws.com/raw/...?AWSAccessKeyId=...",
+    "bannerUrl": "https://marque-banners-xxx.s3.amazonaws.com/banners/hackathon-banner.png"
+  }
+  ```
+- **Errors:** `400 INVALID_CONTENT_TYPE`, `401 UNAUTHORIZED`, `403 FORBIDDEN`.

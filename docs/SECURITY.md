@@ -1,39 +1,68 @@
-# Security Notes
+# Security Architecture & Authorization Specification
 
-## 1. Authentication & Token Security
-- **Bcrypt Password Hashing:** Passwords must be hashed using `bcryptjs` with a work factor of at least 10 rounds before DynamoDB persistence. Never store, log, or transmit plaintext credentials.
-- **Stateless JWTs:** Signed using HMAC SHA-256 (`HS256`) with a cryptographically random secret (`JWT_SECRET`) provided via AWS Lambda environment variables (never committed to Git).
-- **Token Claims:** Include immutable `userId`, `email`, and `role`. Tokens have a strict 24-hour expiration window.
-- **Client Storage:** Auth tokens and user descriptors are stored in browser localStorage. Logouts immediately execute `clearAuth()` to purge tokens.
-- **Explicit Mock Guard:** Client-side persona switching is restricted strictly to mock mode (`VITE_USE_MOCK_API=true`). When `VITE_API_BASE_URL` is configured, mock tokens are immediately invalidated and purged on boot.
+## 1. Authentication & Token Architecture
 
-## 2. Role-Based Access Control (RBAC) & Event-Scoped Permissions
+- **Bcrypt Password Security:** Plaintext passwords are never stored, logged, or serialized. Passwords must be hashed using `bcryptjs` with a work factor of 10 rounds prior to persistence.
+- **Stateless Bearer JWTs:** Signed using HMAC SHA-256 (`HS256`) with a cryptographically secure random secret (`JWT_SECRET`) provided through AWS Lambda environment variables.
+- **Minimal Token Claims:**
+  ```json
+  {
+    "userId": "usr-8f3a9e1b2c4d",
+    "email": "chandrabhanu@example.com",
+    "role": "ATTENDEE",
+    "iat": 1761912000,
+    "exp": 1761998400
+  }
+  ```
+  - **Global Roles Only:** The `role` claim strictly contains `ATTENDEE` or `ORGANIZER`.
+  - **No Permanent Coordinator Role:** `COORDINATOR` is never placed into a JWT.
+  - **No Embedded Event Assignments:** Event check-in assignments are never stored in long-lived tokens; they are validated live against `MarqueEventStaff` on every request to ensure immediate revocation.
+- **Token Lifetime:** 24 hours maximum. Tokens are invalidated client-side upon logout by purging `localStorage`.
+
+---
+
+## 2. Role-Based Access Control (RBAC) & Event Delegation
 
 ```
-+---------------+------------------------+------------------------------------+
-| Role          | Frontend Boundary      | Backend Enforcement Boundary       |
-+---------------+------------------------+------------------------------------+
-| ATTENDEE      | Discover, RSVP, Pass   | Reject check-in, staff, & org APIs |
-| ORGANIZER     | Events Studio, Staff   | Validate event ownership           |
-| COORDINATOR   | Assigned Events Only   | Validate MarqueEventStaff record   |
-+---------------+------------------------+------------------------------------+
++------------------------------------+-----------------------------+------------------------------------+
+| Role / Persona                     | Global System Privileges    | Event-Scoped Privileges            |
++------------------------------------+-----------------------------+------------------------------------+
+| ATTENDEE (Default)                 | Browse Events, RSVP, Pass   | None (unless in MarqueEventStaff)  |
+| ORGANIZER (Provisioned)            | Create Events               | Full owner permissions on owned    |
+| DELEGATED COORDINATOR (Any User)   | Unchanged (Attendee/Org)    | Scan & Check In on ASSIGNED events |
++------------------------------------+-----------------------------+------------------------------------+
 ```
 
-- **Default Registration Privilege:** Public user self-registration (`POST /api/auth/register`) strictly assigns `role: 'ATTENDEE'`. Any client-supplied `role` parameter is silently stripped or rejected.
-- **Untrusted Client Inputs:** Never trust client-supplied `role`, `organizerId`, `checkedInBy`, or `capacity` values. The backend always derives user identity and role from the cryptographically verified JWT payload.
-- **Event Ownership Enforcement:** For `PATCH /api/events/{eventId}` and `POST /api/events/{eventId}/staff`, the backend checks `event.organizerId === token.userId`. Organizers cannot modify events or assign staff to events owned by other organizers.
-- **Event-Scoped Coordinator Delegation:** Coordinators receive check-in permissions **only** for events where their `userId` exists in `MarqueEventStaff`. A coordinator assigned to Hackathon A cannot scan tickets or view attendee lists for DevFest B.
-- **Strict Attendee Isolation:** Attendees attempting to call `/api/events/{eventId}/check-in`, `/api/events/{eventId}/staff`, or `/api/events/{eventId}/attendees` receive HTTP 403 Forbidden.
+### Controlled Organizer Provisioning
+- Public registration (`POST /api/auth/register`) strictly sets `role: "ATTENDEE"`. Any client-supplied `role` parameter is discarded.
+- For the MVP, organizer accounts are provisioned securely via an administrative command-line script (`scripts/seed-organizer.js`) or AWS CLI / DynamoDB Console update setting `role = 'ORGANIZER'`.
+- In local mock mode, client-side persona switching allows evaluator testing, but the mock client cannot elevate privileges against the real AWS backend.
 
-## 3. QR Ticket Architecture & Tamper Resistance
-- **Opaque Identifiers Only:** The QR ticket contains strictly an opaque reference ID (`tkt-xxxxxxxx`).
-- **No Embedded Credentials:** QR codes **never** contain JWTs, user emails, attendee names, passwords, or check-in tokens. If an attendee screenshots their QR pass, no sensitive credentials or elevated tokens are exposed.
-- **Single-Use Enforcement:** DynamoDB conditional updates (`#status = :active`) guarantee that duplicate scans or concurrent scan attempts from multiple check-in lanes are atomically rejected with HTTP 409 Conflict (`ALREADY_CHECKED_IN`).
-- **Status Gating:** Tickets in `CANCELLED`, `WAITLISTED`, or `PENDING` states cannot be checked in.
-- **Auditing:** Successful check-ins record the exact UTC timestamp (`checkedInAt`) and identity of the staff member (`checkedInBy`).
+### Organizer Event Isolation
+- When updating an event (`PATCH /api/events/{eventId}`), assigning coordinators (`POST /api/events/{eventId}/staff`), or viewing analytics (`GET /api/events/{eventId}/stats`), Lambda validates `event.organizerId === token.userId`. Organizers cannot modify or assign staff to events owned by other organizers.
 
-## 4. AWS Infrastructure & Least Privilege
-- **IAM Execution Roles:** The Lambda backend operates under a dedicated AWS IAM role with least-privilege policies restricted strictly to the six Marque DynamoDB tables, the event-banner S3 bucket, and CloudWatch Logs.
-- **Zero Hardcoded Secrets:** No AWS Access Keys, Secret Keys, or API keys are bundled into frontend assets or source repositories.
-- **S3 Security Posture:** The S3 bucket maintains Block Public Access enabled. Uploads are negotiated via short-lived presigned PUT URLs generated by authorized organizer handlers.
-- **Transport Security:** All traffic is strictly encrypted in transit using TLS 1.3 / HTTPS across both the Vercel-hosted frontend and Amazon API Gateway HTTP API.
+### Coordinator Scoping & Privacy Safeguards
+- Coordinators receive access **only** to events where their `userId` exists in `MarqueEventStaff`.
+- To prevent student directory harvesting, coordinators cannot browse the full attendee roster. They must supply a search query of at least 2 characters (`GET /api/events/{eventId}/attendees?q=...`), and the response returns only minimal fields needed for door verification (`ticketId`, `attendeeName`, masked email, `status`).
+- Organizers do not automatically receive scanning access. If an organizer wishes to scan tickets at their own event, their account must be assigned as staff in `MarqueEventStaff`.
+
+---
+
+## 3. QR Ticket Security & Opaque Invariant
+
+- **Opaque Reference Only:** The QR payload generated by the frontend encodes strictly the random opaque ticket ID (e.g., `tkt-8f3a9e1b2c4d`).
+- **Zero Embedded Credentials:** QR codes **never** contain JWTs, user emails, names, passwords, or check-in tokens. A screenshot or photograph of a ticket pass exposes zero credentials.
+- **Single-Use Conditional Enforcement:** DynamoDB conditional updates (`#status = :active`) guarantee that duplicate scans or concurrent scan attempts from multiple gates are atomically rejected with HTTP 409 Conflict (`ALREADY_CHECKED_IN`).
+- **Audit Logging:** Every successful check-in records the exact UTC timestamp (`checkedInAt`) and identity of the coordinator (`checkedInBy`).
+
+---
+
+## 4. AWS Infrastructure & Least-Privilege IAM
+
+- **Zero Hardcoded Secrets:** No AWS credentials, access keys, or API tokens are checked into version control or bundled into the client build.
+- **Dedicated Lambda Execution Role:** The Lambda backend operates under a dedicated AWS IAM role granting least-privilege permissions restricted strictly to:
+  - `dynamodb:GetItem`, `dynamodb:PutItem`, `dynamodb:UpdateItem`, `dynamodb:DeleteItem`, `dynamodb:Query`, `dynamodb:TransactWriteItems` on the six Marque tables and their GSIs.
+  - `s3:PutObject` on `marque-banners-*`.
+  - `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`.
+- **S3 Bucket Hardening:** The event banner bucket enforces Block Public Access. Direct uploads from organizers are negotiated via short-lived presigned URLs.
+- **Transport Security:** All client-to-API and internal communications enforce TLS 1.3 over HTTPS.

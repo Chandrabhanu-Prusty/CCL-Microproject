@@ -1,127 +1,169 @@
-# Architecture
+# Architecture — Final & Frozen Design
 
-## 1. High-Level Design
+## 1. High-Level System Architecture
 
 ```mermaid
 flowchart TD
-    subgraph Clients["Frontend (Vercel / HTTPS)"]
-        A[Attendee] -->|Discover, RSVP, View Pass| FE[React + Vite SPA]
-        O[Organizer] -->|Create Events, Delegate Staff, Analytics| FE
-        C[Coordinator] -->|Assigned Events, Camera Scan, Check-in| FE
+    subgraph Clients["Frontend Layer (Vercel / HTTPS)"]
+        A["Attendee Client"] -->|Browse, RSVP, Display Pass| SPA["React + Vite SPA"]
+        O["Organizer Client"] -->|Create, Edit, Delegate Staff, Analytics| SPA
+        C["Coordinator Client"] -->|Assigned Events, Camera Scan, Check-in| SPA
     end
 
-    FE -->|HTTPS REST API + Bearer JWT| APIGW[Amazon API Gateway]
+    SPA -->|HTTPS REST API + Bearer JWT| APIGW["Amazon API Gateway (HTTP API)"]
 
     subgraph AWS["Serverless Cloud Architecture"]
-        APIGW --> L[AWS Lambda: marque-api]
-        L --> DB[(Amazon DynamoDB)]
-        L --> S3[(Amazon S3: Event Banners)]
+        APIGW --> Router["marque-api: Express / Lambda Router"]
+        Router --> AuthM["authMiddleware (Verify JWT & Role)"]
+        AuthM --> Handlers["Handler Controllers"]
+        Handlers --> Services["Domain Services"]
+        Services --> Repos["DynamoDB Repositories"]
+        Repos --> DDB[("Amazon DynamoDB (On-Demand)")]
+        Services --> S3[("Amazon S3: Event Banners")]
     end
 
-    subgraph Tables["DynamoDB Tables"]
-        DB --> T1[MarqueUsers]
-        DB --> T2[MarqueEvents]
-        DB --> T3[MarqueEventStaff]
-        DB --> T4[MarqueRsvps]
-        DB --> T5[MarqueWaitlists]
-        DB --> T6[MarqueTickets]
+    subgraph Tables["DynamoDB Tables (ACID & Strongly Consistent)"]
+        DDB --> T1["MarqueUsers (Profiles & Email Locks)"]
+        DDB --> T2["MarqueEvents (Capacities & Schedules)"]
+        DDB --> T3["MarqueEventStaff (Event-Scoped Permissions)"]
+        DDB --> T4["MarqueRSVPs (Attendee Registrations)"]
+        DDB --> T5["MarqueWaitlist (FIFO Base Table Queue)"]
+        DDB --> T6["MarqueTickets (Opaque Passes & Check-in Logs)"]
     end
 ```
 
-The frontend is a single-page application hosted on Vercel over HTTPS. Amazon API Gateway exposes the backend REST API. A single serverless Node.js AWS Lambda function (`marque-api`) acts as the request processor with internal router, controller handlers, service orchestration, repositories, and authentication/authorization middleware.
+The system is organized into a clean separation of concerns:
+1. **Frontend Presentation:** React 18 SPA hosted on Vercel over TLS 1.3. Communicates with AWS via a typed API client with zero client-side privilege assumptions.
+2. **API Gateway:** Amazon API Gateway HTTP API routing all `/api/*` traffic to a single monolithic serverless AWS Lambda function (`marque-api`).
+3. **Application Routing & Middleware:** A modular Node.js router that validates request bodies, unpacks Bearer JWTs, and verifies global roles and event-specific check-in permissions.
+4. **Data Persistence:** DynamoDB on-demand tables executing multi-item atomic transactions (`TransactWriteItems`) for capacity allocation and seat reclamation.
+5. **Asset Storage:** Private Amazon S3 bucket for optional event banner graphics accessed via presigned upload URLs.
 
-## 2. Four Core AWS Services
+---
 
-### Amazon API Gateway
-- Public REST/HTTP API entry point; routes HTTP requests to Lambda.
-- Strict CORS configuration allowing the deployed Vercel frontend origin.
-- Token validation is handled by custom Lambda middleware (`authMiddleware`) verifying HMAC SHA-256 signatures, user identity, and stakeholder role claims.
+## 2. Stakeholder Permissions & Authorization Flow
 
-### AWS Lambda
-- Processes authentication, event CRUD, capacity allocation, FIFO waitlist promotions, digital pass issuance, event-staff assignment, and single-use check-in.
-- Validates request schemas and verifies role authorizations (`ATTENDEE`, `ORGANIZER`, `COORDINATOR`).
-- Implements event-scoped coordinator authorization checks via the `MarqueEventStaff` repository.
+```mermaid
+flowchart LR
+    subgraph Roles["Global Account Roles (in JWT)"]
+        ATT["ATTENDEE (Default)"]
+        ORG["ORGANIZER (Provisioned)"]
+    end
 
-### Amazon DynamoDB
-- Stores relational data in isolated, pay-per-request tables:
-  1. `MarqueUsers`: Registered campus accounts and system roles.
-  2. `MarqueEvents`: Campus event records and confirmed attendee tallies.
-  3. `MarqueEventStaff`: Event-scoped coordinator delegations (`eventId` + `userId`).
-  4. `MarqueRsvps`: Individual RSVP registrations and state machines.
-  5. `MarqueWaitlists`: FIFO queue entries sorted chronologically.
-  6. `MarqueTickets`: Opaque ticket codes, active state, and single-use check-in logs.
-- Uses conditional writes (`attribute_not_exists`, `confirmedCount < capacity`, `status = :active`) and atomic transactions (`TransactWriteItems`) to prevent overbooking and race conditions.
+    subgraph Scope["Authorization Checks"]
+        ATT -->|Can RSVP & View Own Pass| PublicAPIs["Public & Attendee Endpoints"]
+        ORG -->|Owns eventId?| OrgAPIs["Event Management & Staff Delegation"]
+        ATT & ORG -->|In MarqueEventStaff for eventId?| StaffAPIs["Venue Check-in Workspace & Scanner"]
+    end
 
-### Amazon S3
-- Private object bucket storing optional campus event banner graphics.
-- Uploads occur via short-lived AWS presigned URLs generated by the Lambda backend.
-- Strictly no sensitive attendee records or credentials stored in S3.
+    subgraph Endpoints["Target Action"]
+        PublicAPIs --> E1["RSVP / Waitlist / View Ticket"]
+        OrgAPIs --> E2["Create/Edit Event, Delegate Staff, View Stats"]
+        StaffAPIs --> E3["Scan Ticket, Search Attendees, Check-in"]
+    end
+```
 
-## 3. Stakeholder Authentication & Role-Based Authorization Flow
+### Pure Two-Tier Global Roles + Event Delegation Rule
+1. **Global Roles:** Only `ATTENDEE` and `ORGANIZER` exist as persistent account roles in `MarqueUsers` and JWT claims.
+2. **Coordinator is NOT a Global Role:** Any registered user (`ATTENDEE` or `ORGANIZER`) can be assigned as a coordinator for a specific event. The user's account role is never mutated.
+3. **Event Scoping:** When an organizer assigns a coordinator, an item is created in `MarqueEventStaff` (`PK: eventId`, `SK: userId`).
+4. **Zero Automatic Scanner Access:** Organizers do not automatically gain check-in permissions. To scan tickets, the organizer's own account must have a record in `MarqueEventStaff`.
+5. **Immediate Revocation:** Deleting an assignment immediately invalidates check-in access on the subsequent request because the Lambda backend queries `MarqueEventStaff` directly.
+
+---
+
+## 3. RSVP, Capacity & FIFO Waitlist Concurrency Flow
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor User as Campus User
-    participant FE as React Frontend
+    actor A as Attendee
     participant GW as API Gateway / Lambda
-    participant Staff as MarqueEventStaff Table
-    participant DB as MarqueTables
+    participant DDB as DynamoDB (TransactWriteItems)
+    participant WL as MarqueWaitlist Base Table
 
-    User->>FE: Sign in with credentials
-    FE->>GW: POST /api/auth/login
-    GW->>DB: Query MarqueUsers, verify bcrypt hash
-    GW-->>FE: Return JWT { userId, email, role: 'ATTENDEE' | 'ORGANIZER' | 'COORDINATOR' }
-    FE->>FE: Mount UI & Nav based on role
+    A->>GW: POST /api/events/{eventId}/rsvp
+    GW->>DDB: TransactWriteItems: Increment confirmedCount IF confirmedCount < capacity
+    alt Capacity Available
+        DDB-->>GW: Transaction Succeeded
+        GW-->>A: 201 Created { status: 'CONFIRMED', ticketId: 'tkt-xxx' }
+    else Event Full (ConditionFailed)
+        GW->>WL: PutItem: queueKey = NOW#userId, status = 'WAITING'
+        GW-->>A: 200 OK { status: 'WAITLISTED', queuePosition: N }
+    end
 
-    Note over User, FE: Coordinator Check-in Flow
-    User->>FE: Navigate to /checkin
-    FE->>GW: GET /api/me/assigned-events (Bearer Token)
-    GW->>Staff: Query assigned events for user.userId
-    GW-->>FE: Return list of assigned events
-    User->>FE: Scan attendee QR ticket
-    FE->>GW: POST /api/events/{eventId}/check-in { ticketId }
-    GW->>Staff: Verify user.userId is assigned to {eventId}
-    alt Not Assigned
-        GW-->>FE: 403 Forbidden (NOT_ASSIGNED_COORDINATOR)
-    else Assigned & Ticket Valid
-        GW->>DB: Atomic conditional update (status == 'ACTIVE')
-        GW-->>FE: 200 OK (CHECKED_IN)
+    Note over A, WL: Cancellation & Safe Promotion
+    actor C as Confirmed Attendee
+    C->>GW: DELETE /api/events/{eventId}/rsvp
+    GW->>WL: Query oldest WAITING entry (Strongly Consistent Read)
+    alt Waitlisted Candidate Found
+        GW->>DDB: TransactWriteItems: Cancel old RSVP/ticket, Promote candidate IF status == 'WAITING'
+        DDB-->>GW: Transaction Succeeded (Capacity count unchanged)
+        GW-->>C: 200 OK { promotedAttendee: 'Aarav Sharma' }
+    else Waitlist Empty
+        GW->>DDB: TransactWriteItems: Cancel RSVP/ticket, Decrement confirmedCount
+        DDB-->>GW: Transaction Succeeded
+        GW-->>C: 200 OK
     end
 ```
 
-1. **Stateless JWT Issuance:** On authentication, the backend signs a JWT with the user's ID, email, and role.
-2. **Client-Side Route Protection:** `AppRoutes.jsx` and `Sidebar.jsx` prevent unauthorized navigation:
-   - Attendees only see Discover Events and My RSVPs; never scanner or organizer links.
-   - Organizers see Manage Events and Analytics.
-   - Coordinators see Assigned Events and the Check-in Workspace.
-3. **Backend Authorization Enforcement:** Frontend route guards provide UX guidance, but the backend is the authoritative boundary:
-   - Event creation/editing requires `user.role === 'ORGANIZER'`.
-   - Modifying an event requires `event.organizerId === user.userId`.
-   - Assigning/revoking coordinators requires `event.organizerId === user.userId`.
-   - Check-in endpoints require either event ownership OR active assignment in `MarqueEventStaff`.
-   - Attendees attempting check-in or organizer endpoints receive HTTP 403 Forbidden.
+---
 
-## 4. RSVP, Capacity & FIFO Waitlist Flow
+## 4. Single-Use Venue Check-In Architecture
 
-1. **Conditional Registration:** The attendee requests RSVP (`POST /api/events/{eventId}/rsvp`).
-2. If `event.confirmedCount < event.capacity`, a DynamoDB transaction increments `confirmedCount`, creates a `CONFIRMED` RSVP, and issues an active opaque ticket (`tkt-xxxxxxxx`).
-3. If capacity is exhausted, the attendee is placed into `MarqueWaitlists` with a FIFO queue key (`ISO_TIMESTAMP#userId`). The RSVP status is set to `WAITLISTED`.
-4. **Cancellation & Promotion:** When a confirmed attendee cancels (`DELETE /api/events/{eventId}/rsvp`), the transaction queries the earliest waiting record from `MarqueWaitlists`. If found, that attendee is promoted to `CONFIRMED`, issued an active ticket, and the capacity count remains steady. If the waitlist is empty, `confirmedCount` decrements by 1.
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Coord as Check-in Coordinator
+    participant FE as React Check-in Workspace
+    participant GW as API Gateway / Lambda
+    participant Staff as MarqueEventStaff
+    participant Tkt as MarqueTickets
 
-## 5. Event-Scoped Venue Check-in Architecture
+    Coord->>FE: Scan Attendee QR Code
+    FE->>GW: POST /api/events/{eventId}/check-in { ticketId: 'tkt-8f3a9e1b2c4d' }
+    GW->>Staff: GetItem: PK=eventId, SK=caller.userId
+    alt Not in Staff Table
+        GW-->>FE: 403 Forbidden (NOT_ASSIGNED_STAFF)
+    else Authorized Staff
+        GW->>Tkt: UpdateItem: SET status = 'CHECKED_IN' WHERE eventId = :e AND status = 'ACTIVE'
+        alt Status was ACTIVE
+            Tkt-->>GW: Success
+            GW-->>FE: 200 OK { status: 'CHECKED_IN', attendeeName: '...' }
+            FE-->>Coord: Green chime & verified screen
+        else Already CHECKED_IN
+            Tkt-->>GW: ConditionFailed
+            GW-->>FE: 409 Conflict (ALREADY_CHECKED_IN)
+            FE-->>Coord: Red error tone & duplicate scan alert
+        end
+    end
+```
 
-1. **Staff Assignment:** Organizers delegate coordinators using `POST /api/events/{eventId}/staff` with the coordinator's campus email. This writes a record to `MarqueEventStaff` linking `eventId` and `userId`.
-2. **Event Scoping:** When a coordinator visits `/checkin`, the app queries `GET /api/me/assigned-events`. The coordinator is only presented with events they are authorized to operate.
-3. **QR Verification:** The QR code displays strictly the opaque ticket ID.
-4. **Atomic Check-in:** The coordinator submits `POST /api/events/{eventId}/check-in`. Lambda validates:
-   - Caller is the event owner OR listed in `MarqueEventStaff` for this `eventId`.
-   - Ticket exists and belongs to this `eventId`.
-   - Ticket is currently `ACTIVE` (not cancelled, waitlisted, or already checked in).
-5. A DynamoDB conditional update marks the ticket `CHECKED_IN`, logs `checkedInAt` and `checkedInBy`, and prevents duplicate check-ins.
+---
 
-## 6. Deployment Boundaries
+## 5. Table to Access Pattern Mapping
 
-- **Frontend:** Vercel over HTTPS with `VITE_API_BASE_URL` pointing to the API Gateway stage endpoint.
-- **Backend:** Monolithic serverless Node.js Lambda function fronted by Amazon API Gateway HTTP API.
-- **Database:** DynamoDB on-demand pay-per-request tables.
+| Table / GSI | Primary Access Patterns Serviced | Consistency Mode |
+| :--- | :--- | :--- |
+| `MarqueUsers` (`userId` + `itemType`) | AP-02 (User Profile), AP-01 via Email Locks | Strongly Consistent |
+| `MarqueUsers.email-index` | AP-01 (Normalized Email Lookup during Login / Staff Assignment) | Eventually Consistent |
+| `MarqueEvents` (`eventId`) | AP-04 (Event Details), Capacity Conditional Updates | Strongly Consistent |
+| `MarqueEvents.status-startAt-index` | AP-03 (Public Event Discovery & Filtering) | Eventually Consistent |
+| `MarqueEvents.organizer-index` | AP-05 (Organizer Dashboard Events List) | Eventually Consistent |
+| `MarqueEventStaff` (`eventId` + `userId`) | AP-06 (List Event Staff), AP-07 (Staff Check-in Verification) | Strongly Consistent |
+| `MarqueEventStaff.user-assigned-events-index` | AP-08 (List Events Assigned to User) | Eventually Consistent |
+| `MarqueRSVPs` (`eventId` + `attendeeId`) | AP-10 (Check Attendee RSVP Status), Duplicate Prevention | Strongly Consistent |
+| `MarqueRSVPs.attendee-index` | AP-09 (My RSVPs Registrations List) | Eventually Consistent |
+| `MarqueWaitlist` (`eventId` + `queueKey`) | AP-11 (Oldest Waitlist FIFO Candidate Query for Promotion) | **Strongly Consistent** |
+| `MarqueWaitlist.attendee-waitlist-index` | Locate User Queue Item on Self-Cancellation | Eventually Consistent |
+| `MarqueTickets` (`ticketId`) | AP-12 (Single Ticket Query), AP-14 (Atomic Check-in) | Strongly Consistent |
+| `MarqueTickets.event-attendees-index` | AP-13 (Attendee Registry Search for Check-in Staff) | Eventually Consistent |
+
+---
+
+## 6. Deployment Boundaries & Infrastructure Wiring
+
+- **Frontend Hosting:** Vercel over TLS 1.3. Environment variable `VITE_API_BASE_URL` points directly to the deployed API Gateway HTTP API stage endpoint.
+- **Backend Execution:** Serverless Node.js 22.x Lambda function fronted by Amazon API Gateway HTTP API with CORS configuration matching the Vercel domain.
+- **Persistence Layer:** Amazon DynamoDB on-demand pay-per-request tables with point-in-time recovery (PITR) enabled.
+- **Media Storage:** Amazon S3 private bucket for organizer banner graphics configured with Block Public Access and short-lived presigned upload URLs.

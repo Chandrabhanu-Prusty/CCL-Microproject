@@ -1,0 +1,1440 @@
+openapi: 3.1.0
+info:
+  title: Marque Campus Event Management API
+  version: 1.0.0
+  description: >
+    Production REST API specification for Marque — responsive campus event management,
+    free RSVP, capacity reservation, deterministic FIFO waitlist, single-use QR ticketing,
+    and event-scoped coordinator check-in on AWS Serverless.
+servers:
+  - url: https://api.marque.campus.edu
+    description: Production API Gateway Endpoint
+  - url: https://staging-api.marque.campus.edu
+    description: Staging Environment
+  - url: http://localhost:3000
+    description: Local Development / Offline Serverless Simulator
+
+paths:
+  # ============================================================================
+  # AUTHENTICATION
+  # ============================================================================
+  /api/auth/register:
+    post:
+      summary: Register User Account
+      description: >
+        Registers a new campus user. Always defaults to global role ATTENDEE.
+        Privileged roles (ORGANIZER) cannot be self-assigned.
+      operationId: registerUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+            example:
+              name: Chandrabhanu Prusty
+              email: chandrabhanu@example.com
+              password: StrongPassword123!
+      responses:
+        '201':
+          description: Account created successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1c3ItOGYzYTllMWIyYzRkIiwiZW1haWwiOiJjaGFuZHJhYmhhbnVAZXhhbXBsZS5jb20iLCJyb2xlIjoiQVRURU5ERUUiLCJpYXQiOjE3NjE5MTIwMDAsImV4cCI6MTc2MTk5ODQwMH0...
+                user:
+                  userId: usr-8f3a9e1b2c4d
+                  name: Chandrabhanu Prusty
+                  email: chandrabhanu@example.com
+                  role: ATTENDEE
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          description: Email already registered.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: EMAIL_ALREADY_EXISTS
+                  message: An account with this normalized email address already exists.
+
+  /api/auth/login:
+    post:
+      summary: Login User Account
+      description: Authenticates user credentials against bcrypt hash and issues stateless HMAC SHA-256 JWT.
+      operationId: loginUser
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: chandrabhanu@example.com
+              password: StrongPassword123!
+      responses:
+        '200':
+          description: Authentication successful.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+              example:
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiJ1c3ItOGYzYTllMWIyYzRkIiwiZW1haWwiOiJjaGFuZHJhYmhhbnVAZXhhbXBsZS5jb20iLCJyb2xlIjoiQVRURU5ERUUiLCJpYXQiOjE3NjE5MTIwMDAsImV4cCI6MTc2MTk5ODQwMH0...
+                user:
+                  userId: usr-8f3a9e1b2c4d
+                  name: Chandrabhanu Prusty
+                  email: chandrabhanu@example.com
+                  role: ATTENDEE
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Invalid email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: Invalid email or password.
+
+  # ============================================================================
+  # EVENTS
+  # ============================================================================
+  /api/events:
+    get:
+      summary: List Published Events
+      description: Returns published upcoming campus events with optional category and keyword search filters.
+      operationId: listEvents
+      security: []
+      parameters:
+        - name: q
+          in: query
+          required: false
+          description: Case-insensitive text search filtering against event title or venue.
+          schema:
+            type: string
+        - name: category
+          in: query
+          required: false
+          description: Filter events by category.
+          schema:
+            $ref: '#/components/schemas/EventCategory'
+      responses:
+        '200':
+          description: List of published events.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventListResponse'
+              example:
+                events:
+                  - eventId: evt-ccl-hackathon-2026
+                    title: Cloud Canvas 2026 Campus Hackathon
+                    description: 48-hour premier cloud computing and serverless architecture hackathon.
+                    category: Technology
+                    startAt: '2026-11-15T09:00:00.000Z'
+                    endAt: '2026-11-17T17:00:00.000Z'
+                    venue: Auditorium & Lab 502, VESIT Campus
+                    capacity: 100
+                    confirmedCount: 88
+                    status: PUBLISHED
+                    organizerId: usr-organizer-01
+                    bannerUrl: https://images.unsplash.com/photo-1504384308090-c894fdcc538d
+    post:
+      summary: Create Campus Event
+      description: Creates a new campus event. Restricted strictly to global role ORGANIZER.
+      operationId: createEvent
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateEventRequest'
+            example:
+              title: Zero-to-Production Full-Stack React & AWS Workshop
+              description: Hands-on practical session building high-performance SPAs.
+              category: Workshop
+              startAt: '2026-11-28T14:00:00.000Z'
+              endAt: '2026-11-28T17:00:00.000Z'
+              venue: Seminar Hall B, IT Building
+              capacity: 40
+              bannerUrl: https://images.unsplash.com/photo-1517694712202-14dd9538aa97
+      responses:
+        '201':
+          description: Event successfully created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleEventResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/events/{eventId}:
+    get:
+      summary: Get Event Details
+      description: Returns complete details and current seat reservation metrics for a single event.
+      operationId: getEventById
+      security: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      responses:
+        '200':
+          description: Event details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleEventResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      summary: Update Event
+      description: Updates event parameters. Caller must be an ORGANIZER and the event owner. Cannot reduce capacity below confirmedCount.
+      operationId: updateEvent
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateEventRequest'
+            example:
+              capacity: 120
+              venue: Grand Auditorium & Lab 502
+      responses:
+        '200':
+          description: Event successfully updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SingleEventResponse'
+        '400':
+          description: Validation failure or capacity reduction below confirmed count.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: INVALID_CAPACITY
+                  message: Cannot reduce capacity below currently confirmed attendees (88).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # EVENT STAFF & COORDINATOR DELEGATION
+  # ============================================================================
+  /api/events/{eventId}/staff:
+    get:
+      summary: List Assigned Coordinators
+      description: Lists all coordinators assigned to this specific event. Restricted to event owner (ORGANIZER).
+      operationId: listEventStaff
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      responses:
+        '200':
+          description: List of assigned coordinators.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventStaffListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    post:
+      summary: Assign Coordinator to Event
+      description: Assigns an existing registered user as coordinator for this event. Restricted to event owner. Does not alter the user's global role.
+      operationId: assignCoordinator
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignCoordinatorRequest'
+            example:
+              email: coordinator.preeti@example.com
+      responses:
+        '201':
+          description: Coordinator successfully assigned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StaffAssignmentResponse'
+        '400':
+          description: User not found with given email.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: USER_NOT_FOUND
+                  message: No registered account found with email coordinator.preeti@example.com.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          description: User already assigned as coordinator for this event.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: ALREADY_ASSIGNED
+                  message: User is already assigned as a coordinator for this event.
+
+  /api/events/{eventId}/staff/{userId}:
+    delete:
+      summary: Revoke Coordinator Assignment
+      description: Immediately revokes a coordinator's check-in permissions for this event. Restricted to event owner.
+      operationId: revokeCoordinator
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+        - name: userId
+          in: path
+          required: true
+          description: Coordinator user identifier to revoke.
+          schema:
+            type: string
+          example: usr-coordinator-01
+      responses:
+        '200':
+          description: Coordinator permission successfully revoked.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+              example:
+                message: Coordinator assignment successfully revoked.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/me/assigned-events:
+    get:
+      summary: List Assigned Events for Current User
+      description: Returns events where the authenticated caller has active check-in assignments (or owned events).
+      operationId: getMyAssignedEvents
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of events caller is authorized to check in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssignedEventsListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ============================================================================
+  # RSVP & WAITLIST
+  # ============================================================================
+  /api/events/{eventId}/rsvp:
+    post:
+      summary: Register RSVP or Join FIFO Waitlist
+      description: >
+        Atomically registers caller for the event. If capacity is available, issues active CONFIRMED ticket.
+        If full, atomically inserts into FIFO queue and returns 200 WAITLISTED.
+      operationId: rsvpEvent
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      responses:
+        '201':
+          description: Seat reserved. Registration confirmed.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RsvpConfirmedResponse'
+              example:
+                status: CONFIRMED
+                rsvpId: rsvp-9a8b7c6d
+                ticketId: tkt-8f3a9e1b2c4d
+                message: Registration confirmed. Your digital pass is available.
+        '200':
+          description: Event full. Placed in deterministic FIFO waitlist queue.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RsvpWaitlistedResponse'
+              example:
+                status: WAITLISTED
+                rsvpId: rsvp-9a8b7c6d
+                queuePosition: 3
+                message: Event is currently full. You have been placed in the FIFO waitlist.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Duplicate registration detected.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: DUPLICATE_REGISTRATION
+                  message: You already have an active confirmed or waitlisted registration for this event.
+    delete:
+      summary: Cancel RSVP Registration
+      description: Cancels caller's registration. If confirmed, triggers atomic FIFO promotion of earliest waitlisted candidate.
+      operationId: cancelRsvp
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      responses:
+        '200':
+          description: Registration cancelled successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CancelRsvpResponse'
+              example:
+                message: Registration successfully cancelled.
+                promotedAttendee: Aarav Sharma
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Active registration not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: RSVP_NOT_FOUND
+                  message: Active registration not found for this event.
+
+  /api/me/rsvps:
+    get:
+      summary: Get Current User Registrations
+      description: Returns caller's event registrations with statuses (CONFIRMED, WAITLISTED, CANCELLED) and ticket IDs.
+      operationId: getMyRsvps
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: List of user registrations.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyRsvpsResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ============================================================================
+  # TICKETS & DIGITAL PASSES
+  # ============================================================================
+  /api/tickets/{ticketId}:
+    get:
+      summary: Get Ticket Details
+      description: Returns ticket pass details. Restricted strictly to the ticket owner.
+      operationId: getTicketById
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: ticketId
+          in: path
+          required: true
+          description: Opaque ticket reference ID.
+          schema:
+            type: string
+          example: tkt-8f3a9e1b2c4d
+      responses:
+        '200':
+          description: Ticket pass details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Caller is not the ticket owner.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: FORBIDDEN
+                  message: Attendees can only view their own digital tickets.
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # VENUE CHECK-IN & ATTENDEE LOOKUP
+  # ============================================================================
+  /api/events/{eventId}/attendees:
+    get:
+      summary: Search Attendees for Check-in
+      description: >
+        Search attendee registry. Caller must be the event owner (ORGANIZER) or assigned coordinator in MarqueEventStaff.
+        Coordinators must supply query param 'q' (min 2 characters) and receive masked attendee data.
+      operationId: searchAttendees
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+        - name: q
+          in: query
+          required: false
+          description: Search term matching attendee name, email, or ticket ID. Required for coordinators.
+          schema:
+            type: string
+          example: aarav
+      responses:
+        '200':
+          description: Matching attendees list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttendeeSearchResponse'
+        '400':
+          description: Missing search query for coordinator.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: QUERY_REQUIRED
+                  message: Coordinators must supply a search query of at least 2 characters.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/events/{eventId}/check-in:
+    post:
+      summary: Execute Single-Use Ticket Check-in
+      description: >
+        Atomically checks in an attendee ticket. Caller must be event owner or assigned staff in MarqueEventStaff.
+        Rejects inactive or previously checked-in tickets atomically.
+      operationId: checkInTicket
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckInRequest'
+            example:
+              ticketId: tkt-8f3a9e1b2c4d
+      responses:
+        '200':
+          description: Ticket admission successfully checked in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckInSuccessResponse'
+              example:
+                status: CHECKED_IN
+                ticketId: tkt-8f3a9e1b2c4d
+                attendeeName: Chandrabhanu Prusty
+                attendeeEmail: chandrabhanu@example.com
+                checkedInAt: '2026-11-15T09:15:00.000Z'
+                checkedInBy: Preeti Coordinator
+        '400':
+          description: Ticket belongs to another event or is inactive.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: INVALID_EVENT
+                  message: Ticket does not belong to this event.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Ticket reference not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: TICKET_NOT_FOUND
+                  message: Invalid ticket reference.
+        '409':
+          description: Ticket has already been checked in.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: ALREADY_CHECKED_IN
+                  message: Ticket already checked in at 9:15 AM by Preeti Coordinator.
+
+  # ============================================================================
+  # STATISTICS & ANALYTICS
+  # ============================================================================
+  /api/events/{eventId}/stats:
+    get:
+      summary: Get Full Event Statistics & Analytics
+      description: Returns capacity, confirmed, waitlist, and attendance metrics. Restricted to event owner (ORGANIZER).
+      operationId: getEventStats
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      responses:
+        '200':
+          description: Comprehensive event analytics.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventStatsResponse'
+              example:
+                capacity: 100
+                confirmedCount: 88
+                waitlistCount: 12
+                checkedInCount: 65
+                attendancePercentage: 74
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/events/{eventId}/checkin-summary:
+    get:
+      summary: Get Coordinator Check-in Summary
+      description: Returns minimal check-in and confirmation counts for assigned staff during gate check-in.
+      operationId: getCheckinSummary
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          description: Unique event identifier.
+          schema:
+            type: string
+          example: evt-ccl-hackathon-2026
+      responses:
+        '200':
+          description: Minimal check-in count summary.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckinSummaryResponse'
+              example:
+                confirmedCount: 88
+                checkedInCount: 65
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # S3 BANNER UPLOADS
+  # ============================================================================
+  /api/uploads/banner-url:
+    post:
+      summary: Request Presigned S3 Upload URL
+      description: Generates short-lived presigned S3 upload URL for event banners. Restricted to global role ORGANIZER.
+      operationId: getPresignedBannerUrl
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BannerUploadRequest'
+            example:
+              fileName: cloud-canvas-banner.png
+              contentType: image/png
+      responses:
+        '200':
+          description: Presigned upload URL generated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BannerUploadResponse'
+              example:
+                uploadUrl: https://marque-event-banners.s3.amazonaws.com/raw/banner-xxx?AWSAccessKeyId=...
+                bannerUrl: https://marque-event-banners.s3.amazonaws.com/banners/cloud-canvas-banner.png
+        '400':
+          description: Unsupported image content-type.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: INVALID_CONTENT_TYPE
+                  message: Allowed banner formats are image/jpeg, image/png, image/webp.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+# ============================================================================
+# COMPONENTS & SCHEMAS
+# ============================================================================
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Bearer JWT authentication using HS256 algorithm.
+
+  schemas:
+    # Auth Models
+    RegisterRequest:
+      type: object
+      required:
+        - name
+        - email
+        - password
+      properties:
+        name:
+          type: string
+          minLength: 2
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+
+    LoginRequest:
+      type: object
+      required:
+        - email
+        - password
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    UserEntity:
+      type: object
+      required:
+        - userId
+        - name
+        - email
+        - role
+      properties:
+        userId:
+          type: string
+        name:
+          type: string
+        email:
+          type: string
+          format: email
+        role:
+          $ref: '#/components/schemas/GlobalUserRole'
+
+    GlobalUserRole:
+      type: string
+      enum:
+        - ATTENDEE
+        - ORGANIZER
+      description: Persistent global account roles.
+
+    AuthResponse:
+      type: object
+      required:
+        - token
+        - user
+      properties:
+        token:
+          type: string
+          description: Signed HMAC SHA-256 JWT containing userId, email, and role claims.
+        user:
+          $ref: '#/components/schemas/UserEntity'
+
+    # Event Models
+    EventCategory:
+      type: string
+      enum:
+        - Technology
+        - Workshop
+        - Cultural
+        - Academic
+        - Sports
+
+    EventStatus:
+      type: string
+      enum:
+        - PUBLISHED
+        - DRAFT
+        - CANCELLED
+
+    EventEntity:
+      type: object
+      required:
+        - eventId
+        - title
+        - description
+        - category
+        - startAt
+        - venue
+        - capacity
+        - confirmedCount
+        - status
+        - organizerId
+      properties:
+        eventId:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+          nullable: true
+        venue:
+          type: string
+        capacity:
+          type: integer
+          minimum: 1
+        confirmedCount:
+          type: integer
+          minimum: 0
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        organizerId:
+          type: string
+        bannerUrl:
+          type: string
+          format: uri
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateEventRequest:
+      type: object
+      required:
+        - title
+        - description
+        - category
+        - startAt
+        - venue
+        - capacity
+      properties:
+        title:
+          type: string
+          minLength: 3
+          maxLength: 150
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+        venue:
+          type: string
+          minLength: 2
+        capacity:
+          type: integer
+          minimum: 1
+        bannerUrl:
+          type: string
+          format: uri
+
+    UpdateEventRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        category:
+          $ref: '#/components/schemas/EventCategory'
+        startAt:
+          type: string
+          format: date-time
+        endAt:
+          type: string
+          format: date-time
+        venue:
+          type: string
+        capacity:
+          type: integer
+          minimum: 1
+        bannerUrl:
+          type: string
+          format: uri
+
+    EventListResponse:
+      type: object
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/EventEntity'
+
+    SingleEventResponse:
+      type: object
+      required:
+        - event
+      properties:
+        event:
+          $ref: '#/components/schemas/EventEntity'
+
+    # Staff Models
+    StaffAssignmentEntity:
+      type: object
+      required:
+        - eventId
+        - userId
+        - email
+        - name
+        - permission
+        - assignedAt
+        - assignedBy
+      properties:
+        eventId:
+          type: string
+        userId:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        permission:
+          type: string
+          enum: [CHECK_IN]
+        assignedAt:
+          type: string
+          format: date-time
+        assignedBy:
+          type: string
+
+    AssignCoordinatorRequest:
+      type: object
+      required:
+        - email
+      properties:
+        email:
+          type: string
+          format: email
+
+    StaffAssignmentResponse:
+      type: object
+      required:
+        - assignment
+      properties:
+        assignment:
+          $ref: '#/components/schemas/StaffAssignmentEntity'
+
+    EventStaffListResponse:
+      type: object
+      required:
+        - staff
+      properties:
+        staff:
+          type: array
+          items:
+            $ref: '#/components/schemas/StaffAssignmentEntity'
+
+    AssignedEventSummary:
+      type: object
+      required:
+        - eventId
+        - title
+        - venue
+        - confirmedCount
+      properties:
+        eventId:
+          type: string
+        title:
+          type: string
+        venue:
+          type: string
+        startAt:
+          type: string
+          format: date-time
+        confirmedCount:
+          type: integer
+
+    AssignedEventsListResponse:
+      type: object
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AssignedEventSummary'
+
+    # RSVP & Waitlist Models
+    RsvpConfirmedResponse:
+      type: object
+      required:
+        - status
+        - rsvpId
+        - ticketId
+        - message
+      properties:
+        status:
+          type: string
+          enum: [CONFIRMED]
+        rsvpId:
+          type: string
+        ticketId:
+          type: string
+        message:
+          type: string
+
+    RsvpWaitlistedResponse:
+      type: object
+      required:
+        - status
+        - rsvpId
+        - queuePosition
+        - message
+      properties:
+        status:
+          type: string
+          enum: [WAITLISTED]
+        rsvpId:
+          type: string
+        queuePosition:
+          type: integer
+          minimum: 1
+        message:
+          type: string
+
+    CancelRsvpResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+        promotedAttendee:
+          type: string
+          nullable: true
+
+    UserRsvpSummary:
+      type: object
+      required:
+        - rsvpId
+        - eventId
+        - status
+        - createdAt
+        - event
+      properties:
+        rsvpId:
+          type: string
+        eventId:
+          type: string
+        status:
+          type: string
+          enum: [CONFIRMED, WAITLISTED, CANCELLED]
+        ticketId:
+          type: string
+          nullable: true
+        queuePosition:
+          type: integer
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        event:
+          type: object
+          properties:
+            title:
+              type: string
+            venue:
+              type: string
+            startAt:
+              type: string
+              format: date-time
+
+    MyRsvpsResponse:
+      type: object
+      required:
+        - rsvps
+      properties:
+        rsvps:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRsvpSummary'
+
+    # Ticket Models
+    TicketEntity:
+      type: object
+      required:
+        - ticketId
+        - eventId
+        - attendeeId
+        - attendeeName
+        - eventTitle
+        - eventVenue
+        - eventStartAt
+        - status
+        - issuedAt
+      properties:
+        ticketId:
+          type: string
+        eventId:
+          type: string
+        attendeeId:
+          type: string
+        attendeeName:
+          type: string
+        attendeeEmail:
+          type: string
+          format: email
+        eventTitle:
+          type: string
+        eventVenue:
+          type: string
+        eventStartAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [ACTIVE, CHECKED_IN, CANCELLED]
+        issuedAt:
+          type: string
+          format: date-time
+        checkedInAt:
+          type: string
+          format: date-time
+          nullable: true
+        checkedInBy:
+          type: string
+          nullable: true
+
+    TicketResponse:
+      type: object
+      required:
+        - ticket
+      properties:
+        ticket:
+          $ref: '#/components/schemas/TicketEntity'
+
+    # Check-in Models
+    AttendeeLookupItem:
+      type: object
+      required:
+        - ticketId
+        - attendeeName
+        - attendeeEmail
+        - status
+      properties:
+        ticketId:
+          type: string
+        attendeeName:
+          type: string
+        attendeeEmail:
+          type: string
+        status:
+          type: string
+          enum: [ACTIVE, CHECKED_IN, CANCELLED]
+        checkedInAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    AttendeeSearchResponse:
+      type: object
+      required:
+        - attendees
+      properties:
+        attendees:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttendeeLookupItem'
+
+    CheckInRequest:
+      type: object
+      required:
+        - ticketId
+      properties:
+        ticketId:
+          type: string
+
+    CheckInSuccessResponse:
+      type: object
+      required:
+        - status
+        - ticketId
+        - attendeeName
+        - checkedInAt
+        - checkedInBy
+      properties:
+        status:
+          type: string
+          enum: [CHECKED_IN]
+        ticketId:
+          type: string
+        attendeeName:
+          type: string
+        attendeeEmail:
+          type: string
+          format: email
+        checkedInAt:
+          type: string
+          format: date-time
+        checkedInBy:
+          type: string
+
+    # Statistics Models
+    EventStatsResponse:
+      type: object
+      required:
+        - capacity
+        - confirmedCount
+        - waitlistCount
+        - checkedInCount
+        - attendancePercentage
+      properties:
+        capacity:
+          type: integer
+        confirmedCount:
+          type: integer
+        waitlistCount:
+          type: integer
+        checkedInCount:
+          type: integer
+        attendancePercentage:
+          type: integer
+
+    CheckinSummaryResponse:
+      type: object
+      required:
+        - confirmedCount
+        - checkedInCount
+      properties:
+        confirmedCount:
+          type: integer
+        checkedInCount:
+          type: integer
+
+    # Upload Models
+    BannerUploadRequest:
+      type: object
+      required:
+        - fileName
+        - contentType
+      properties:
+        fileName:
+          type: string
+        contentType:
+          type: string
+          enum: [image/jpeg, image/png, image/webp]
+
+    BannerUploadResponse:
+      type: object
+      required:
+        - uploadUrl
+        - bannerUrl
+      properties:
+        uploadUrl:
+          type: string
+          format: uri
+        bannerUrl:
+          type: string
+          format: uri
+
+    # Shared Responses
+    MessageResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: object
+
+  responses:
+    ValidationError:
+      description: Invalid request parameters or payload.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Required field 'title' is missing or invalid.
+              details:
+                field: title
+
+    Unauthorized:
+      description: Authentication token missing, expired, or invalid.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: UNAUTHORIZED
+              message: Authentication required. Please provide a valid Bearer token.
+
+    Forbidden:
+      description: Insufficient privileges or lack of event staff assignment.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: FORBIDDEN
+              message: You do not have permission to perform this action.
+
+    NotFound:
+      description: Target resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            error:
+              code: NOT_FOUND
+              message: The requested resource does not exist.
+

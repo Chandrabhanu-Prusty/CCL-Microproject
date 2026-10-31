@@ -1,82 +1,78 @@
-# Team Responsibilities
+# Team Responsibilities & Ownership Boundaries
 
-## Shared Rules
+## Shared Rules & Code Quality Standards
 
-- **Shared repository:** https://github.com/Chandrabhanu-Prusty/CCL-Microproject
-- Agree on `API_CONTRACT.md` and `DATABASE_DESIGN.md` before merging backend changes.
-- Work on separate feature branches; commit small, testable, verifiable changes.
-- Never commit secrets, AWS Access Keys, or `.env` files.
-- Open pull requests with test evidence and request review before merging to `main`.
-- Each member owns implementation/testing of their assigned scope; all members participate in end-to-end integration.
+- **Shared Repository:** https://github.com/Chandrabhanu-Prusty/CCL-Microproject
+- **Frozen Specifications:** All implementation must strictly conform to `docs/API_CONTRACT.md` and `docs/DATABASE_DESIGN.md`. Backend developers must not invent endpoint paths, DynamoDB keys, or authorization mechanisms.
+- **Security Boundaries:** Strictly enforce `docs/SECURITY.md`. Never trust client-supplied roles, ownership IDs, or check-in counters.
+- **Git Protocol:** Feature branch isolation (`feature/aws-auth-events`, `feature/rsvp-waitlist-checkin`). Open PRs with test evidence before merging to `main`.
+- **Zero Secrets in Code:** Never commit `.env` files, API keys, or AWS access tokens.
 
 ---
 
-## 1. Chandrabhanu — Frontend Engineering, UI/UX & Integration
+## 1. Chandrabhanu — Frontend Engineering & System Integration
 
 **Branch:** `feature/frontend`
 
-**Core Ownership:**
-- Redesign and implement the complete React + Vite application shell matching the dark graphite GDG-inspired design system (`#0D0E12`, `#14151B`, `#1B1D24`, `#F04F8B`, `#FF984F`).
-- Implement strict client-side Role-Based Access Control (RBAC):
-  - **Attendee Experience:** Event discovery, search/filter, event details, RSVP/waitlist, My RSVPs (`/my-registrations`), and digital QR ticket display (`/tickets/{ticketId}`). Strictly eliminate scanners, check-in links, and organizer dashboards from attendee views.
-  - **Organizer Experience:** Manage Events dashboard (`/organizer`), event creation/editing modal, attendee roster modal, live attendance analytics modal, and coordinator delegation modal (`eventStaffService`).
-  - **Coordinator Experience:** Dedicated venue check-in workspace (`/checkin`, `/checkin/{eventId}`), assigned events discovery (`GET /api/me/assigned-events`), WebRTC camera scanner, manual lookup fallback, and sound feedback chimes.
-- Implement isolated mock adapter (`mockData.js`) with 3 distinct test personas (`usr-attendee-demo`, `usr-organizer-01`, `usr-coordinator-01`).
-- Ensure robust HTTP API client (`apiClient.js`) adhering to `API_CONTRACT.md`, strictly disabling mock fallback when `VITE_API_BASE_URL` is set.
-- Maintain comprehensive unit tests (`npm test --prefix frontend`) and production builds (`npm run build --prefix frontend`).
+**Core Scope:**
+- Production React + Vite Single Page Application conforming to the GDG-inspired graphite design system (`DESIGN.md`).
+- Strict client-side route guards and navigation reflecting the pure two-tier role model:
+  - Global `ATTENDEE` and `ORGANIZER` views.
+  - Coordinator navigation driven strictly by live event assignments (`GET /api/me/assigned-events`).
+  - Read-only digital pass (`/tickets/{ticketId}`) rendering opaque ticket QR codes.
+- Camera-based WebRTC scanner with fallbacks to manual query-based attendee search.
+- Mock data adapter (`mockData.js`) strictly isolated behind `VITE_USE_MOCK_API=true`.
+- Zero mock fallbacks when `VITE_API_BASE_URL` is set.
 - Deploy frontend to Vercel over HTTPS and verify mobile camera permissions.
-
-**Deliverables:** Production frontend SPA, UI design system (`DESIGN.md`), role-separated client navigation, test suite passing 18/18 checks, and Vercel deployment.
 
 ---
 
-## 2. Neilsen — JWT Authentication, API Gateway & Event Management Handlers
+## 2. Neilsen — Authentication, Event Studio & Staff Delegation Handlers
 
 **Branch:** `feature/aws-auth-events`
 
-**Core Ownership:**
-- Implement Lambda entry point (`backend/src/handlers/auth/`, `backend/src/handlers/events/`).
-- Build user registration and authentication handlers with bcrypt password hashing (10 rounds).
-- Enforce default `ATTENDEE` role on public signup; reject client-supplied elevated privileges.
-- Implement stateless HMAC SHA-256 JWT generation and verification middleware (`authMiddleware.js`).
-- Implement event CRUD handlers (`POST /api/events`, `PATCH /api/events/{eventId}`, `GET /api/events`).
-- Validate organizer event ownership (`event.organizerId === user.userId`) on all edit operations.
-- Implement coordinator assignment endpoints (`POST /api/events/{eventId}/staff`, `DELETE /api/events/{eventId}/staff/{userId}`, `GET /api/events/{eventId}/staff`).
-- Configure Amazon API Gateway HTTP API routes, stage variables, and CORS policies for the Vercel frontend.
-- Document environment variables: `JWT_SECRET`, `USERS_TABLE_NAME`, `EVENTS_TABLE_NAME`, `EVENT_STAFF_TABLE_NAME`.
-
-**Deliverables:** Authentication service, event management handlers, staff delegation APIs, API Gateway route mappings, and Postman authentication tests.
+**Core Scope:**
+- Lambda entry point routing and shared error serialization matching the standard format:
+  ```json
+  { "error": { "code": "...", "message": "...", "details": {} } }
+  ```
+- **Authentication Handlers:**
+  - `POST /api/auth/register`: Implement transactional email lock in `MarqueUsers` and bcrypt hashing. Always assign `role: "ATTENDEE"`.
+  - `POST /api/auth/login`: Validate credentials against bcrypt hash and issue stateless Bearer JWT containing `{ userId, email, role }`.
+- **Event Studio Handlers:**
+  - `GET /api/events` & `GET /api/events/{eventId}`: Public event listing with category/text filters.
+  - `POST /api/events`: Event creation restricted to global role `ORGANIZER`.
+  - `PATCH /api/events/{eventId}`: Validate event ownership (`event.organizerId === user.userId`) and reject capacity reduction below `confirmedCount`.
+- **Staff Delegation Handlers:**
+  - `GET /api/events/{eventId}/staff`: Owner-only coordinator roster query.
+  - `POST /api/events/{eventId}/staff`: Assign coordinator by email; write to `MarqueEventStaff` without altering the user's global role.
+  - `DELETE /api/events/{eventId}/staff/{userId}`: Revoke coordinator check-in authorization.
+  - `GET /api/me/assigned-events`: Query `user-assigned-events-index` for caller's assigned events.
+- **S3 Presigned URL Handler:**
+  - `POST /api/uploads/banner-url`: Validate organizer ownership and generate short-lived presigned upload URL.
 
 ---
 
-## 3. Preeti — DynamoDB Schema, Capacity Safe RSVP, Waitlist & Check-in
+## 3. Preeti — Transactional RSVP, Waitlist, Single-Use Check-in & Analytics
 
 **Branch:** `feature/rsvp-waitlist-checkin`
 
-**Core Ownership:**
-- Provision and manage DynamoDB tables: `MarqueUsers`, `MarqueEvents`, `MarqueEventStaff`, `MarqueRSVPs`, `MarqueWaitlist`, `MarqueTickets`.
-- Implement `eventStaffRepository.js` and `GET /api/me/assigned-events` handler.
-- Build capacity-safe RSVP handler (`POST /api/events/{eventId}/rsvp`) utilizing `TransactWriteItems` with condition `confirmedCount < capacity`.
-- Build FIFO waitlist queue mechanism sorting by `ISO_TIMESTAMP#userId`.
-- Implement cancellation and atomic promotion flow (`DELETE /api/events/{eventId}/rsvp`):
-  - Query earliest waiting user via GSI `event-queue-index`.
-  - Atomically promote waitlisted user, activate ticket, and preserve capacity tally.
-- Implement event-scoped check-in handler (`POST /api/events/{eventId}/check-in`):
-  - Verify caller is event owner OR listed in `MarqueEventStaff`. Reject attendees with HTTP 403.
-  - Verify ticket is `ACTIVE` and belongs to `eventId`.
-  - Execute conditional update to `CHECKED_IN` preventing race conditions or duplicate check-in.
-- Implement attendee lookup (`GET /api/events/{eventId}/attendees`) and live analytics (`GET /api/events/{eventId}/stats`).
-
-**Deliverables:** DynamoDB table definitions, transactional RSVP/waitlist service, single-use check-in handler, and concurrency test reports.
-
----
-
-## Handover & Integration Checklist
-
-1. **API Alignment:** All endpoints match the specifications in `docs/API_CONTRACT.md`.
-2. **Database Alignment:** Table names, primary keys, and GSIs match `docs/DATABASE_DESIGN.md`.
-3. **Security Boundaries:** Strict enforcement of `docs/SECURITY.md` across both frontend guards and Lambda middleware.
-4. **Local Verification:**
-   - Frontend tests pass: `npm test --prefix frontend`
-   - Frontend builds cleanly: `npm run build --prefix frontend`
-5. **Configuration:** All environment variables documented without values (`.env.example`).
+**Core Scope:**
+- Provision DynamoDB tables: `MarqueUsers`, `MarqueEvents`, `MarqueEventStaff`, `MarqueRSVPs`, `MarqueWaitlist`, `MarqueTickets`.
+- **Capacity-Safe RSVP Engine:**
+  - `POST /api/events/{eventId}/rsvp`: Implement `TransactWriteItems` updating `confirmedCount` with condition `confirmedCount < capacity`.
+  - Fallback to `MarqueWaitlist` on capacity full returning `200 OK` (`WAITLISTED`).
+- **Deterministic FIFO Promotion Engine:**
+  - `DELETE /api/events/{eventId}/rsvp`: Self-cancellation handler.
+  - Query oldest waiting entry on `MarqueWaitlist` base table using **Strongly Consistent Reads**.
+  - Atomically promote waitlist candidate, activate ticket, and preserve capacity tally.
+- **Digital Passes & Single-Use Check-in Handlers:**
+  - `GET /api/tickets/{ticketId}`: Owner-only ticket view.
+  - `GET /api/events/{eventId}/attendees`: Enforce search query parameter for coordinators; return masked PII.
+  - `POST /api/events/{eventId}/check-in`:
+    - Verify caller in `MarqueEventStaff` for `eventId`.
+    - Execute atomic conditional update `#status = :checkedIn` WHERE `#status = :active`.
+    - Return 409 `ALREADY_CHECKED_IN` on duplicate scan.
+- **Analytics Handlers:**
+  - `GET /api/events/{eventId}/stats`: Full registration and waitlist statistics for event owner.
+  - `GET /api/events/{eventId}/checkin-summary`: Minimal check-in counter for assigned coordinators.

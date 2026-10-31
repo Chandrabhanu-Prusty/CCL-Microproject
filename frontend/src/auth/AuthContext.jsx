@@ -2,11 +2,17 @@
  * React Context for Authentication and Role Management.
  * Restricts demo auto-login and client-side role switching to explicit mock mode.
  * In real API mode, authentication and authorization are strictly backend-driven.
+ *
+ * NOTE ON STAKEHOLDER MODEL:
+ * Global account roles are strictly ATTENDEE and ORGANIZER.
+ * COORDINATOR is an event-specific delegation verified live via MarqueEventStaff,
+ * not a global account role.
  */
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { getToken, getUser, setToken, setUser, clearAuth } from './authHelpers';
 import * as authService from '../services/authService';
+import * as eventStaffService from '../services/eventStaffService';
 import { isMockMode } from '../services/apiClient';
 
 const AuthContext = createContext(null);
@@ -29,14 +35,29 @@ const DEMO_PERSONAS = {
     userId: 'usr-coordinator-01',
     email: 'coordinator.preeti@example.com',
     name: 'Preeti Coordinator',
-    role: 'COORDINATOR',
+    role: 'ATTENDEE', // Retains ATTENDEE global role, but holds event staff assignments!
+    hasAssignedEvents: true,
   },
 };
 
 export function AuthProvider({ children }) {
   const [user, setCurrentUser] = useState(null);
   const [token, setCurrentToken] = useState(null);
+  const [assignedEvents, setAssignedEvents] = useState([]);
   const [loading, setLoading] = useState(true);
+
+  const fetchUserAssignedEvents = async (authToken) => {
+    if (!authToken) {
+      setAssignedEvents([]);
+      return;
+    }
+    try {
+      const res = await eventStaffService.getAssignedEvents();
+      setAssignedEvents(res.events || []);
+    } catch {
+      setAssignedEvents([]);
+    }
+  };
 
   useEffect(() => {
     // Rehydrate auth state on mount
@@ -48,6 +69,7 @@ export function AuthProvider({ children }) {
       clearAuth();
       setCurrentToken(null);
       setCurrentUser(null);
+      setAssignedEvents([]);
       setLoading(false);
       return;
     }
@@ -55,10 +77,11 @@ export function AuthProvider({ children }) {
     if (savedToken && savedUser) {
       setCurrentToken(savedToken);
       setCurrentUser(savedUser);
+      fetchUserAssignedEvents(savedToken);
     } else {
-      // User must sign in first; fresh visits start unauthenticated
       setCurrentToken(null);
       setCurrentUser(null);
+      setAssignedEvents([]);
     }
     setLoading(false);
   }, []);
@@ -70,6 +93,7 @@ export function AuthProvider({ children }) {
       setUser(data.user);
       setCurrentToken(data.token);
       setCurrentUser(data.user);
+      await fetchUserAssignedEvents(data.token);
     }
     return data;
   };
@@ -81,6 +105,7 @@ export function AuthProvider({ children }) {
       setUser(data.user);
       setCurrentToken(data.token);
       setCurrentUser(data.user);
+      await fetchUserAssignedEvents(data.token);
     }
     return data;
   };
@@ -89,30 +114,34 @@ export function AuthProvider({ children }) {
     clearAuth();
     setCurrentToken(null);
     setCurrentUser(null);
+    setAssignedEvents([]);
   };
 
   // Switch role for quick testing/grading across Attendee, Organizer, Coordinator in mock mode ONLY
-  const switchRole = (newRole) => {
+  const switchRole = async (targetPersonaKey) => {
     if (!isMockMode) {
       console.warn(
         '[Marque Auth] Client-side role switching is restricted to mock mode. In real API mode, user roles are determined by backend authentication.'
       );
       return;
     }
-    const persona = DEMO_PERSONAS[newRole] || {
+    const persona = DEMO_PERSONAS[targetPersonaKey] || {
       userId: `usr-${Date.now().toString(36)}`,
-      email: `${newRole.toLowerCase()}@example.com`,
-      name: `${newRole} User`,
-      role: newRole,
+      email: `${targetPersonaKey.toLowerCase()}@example.com`,
+      name: `${targetPersonaKey} User`,
+      role: targetPersonaKey === 'ORGANIZER' ? 'ORGANIZER' : 'ATTENDEE',
     };
     setUser(persona);
     setCurrentUser(persona);
+    await fetchUserAssignedEvents(token);
   };
 
-  const role = user?.role || 'ATTENDEE';
+  const role = user?.role === 'ORGANIZER' ? 'ORGANIZER' : 'ATTENDEE';
   const isOrganizer = role === 'ORGANIZER';
-  const isCoordinator = role === 'COORDINATOR';
-  const isAttendee = role === 'ATTENDEE';
+  // Coordinator access is derived strictly from whether the user has live event assignments!
+  const hasStaffAssignments = assignedEvents.length > 0 || (isMockMode && user?.hasAssignedEvents);
+  const isCoordinator = hasStaffAssignments;
+  const isAttendee = true; // All campus users have attendee privileges (browsing, RSVP, passes)
 
   const value = {
     user,
@@ -122,6 +151,9 @@ export function AuthProvider({ children }) {
     isOrganizer,
     isCoordinator,
     isAttendee,
+    assignedEvents,
+    hasStaffAssignments,
+    refreshAssignedEvents: () => fetchUserAssignedEvents(token),
     isMockMode,
     loading,
     login,
