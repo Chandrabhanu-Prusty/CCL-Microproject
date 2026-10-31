@@ -55,17 +55,18 @@ describe('API Contract & Mock Backend Verification', () => {
   });
 
   test('Single-use check-in enforces ACTIVE ticket and blocks duplicate check-in', async () => {
-    const assignedCoord = {
+    // Preeti Coordinator has global role ATTENDEE and explicit CHECK_IN assignment in mockEventStaff
+    const assignedStaff = {
       userId: 'usr-coordinator-01',
       name: 'Preeti Coordinator',
-      role: 'COORDINATOR',
+      role: 'ATTENDEE',
     };
 
     // Check in Aarav Sharma (tkt-sample-coordinator-lookup) for evt-ccl-hackathon-2026
     const checkInRes = await mockBackend.checkInTicket(
       'evt-ccl-hackathon-2026',
       'tkt-sample-coordinator-lookup',
-      assignedCoord
+      assignedStaff
     );
     assert.equal(checkInRes.status, 'CHECKED_IN');
     assert.ok(checkInRes.checkedInAt);
@@ -76,7 +77,7 @@ describe('API Contract & Mock Backend Verification', () => {
         await mockBackend.checkInTicket(
           'evt-ccl-hackathon-2026',
           'tkt-sample-coordinator-lookup',
-          assignedCoord
+          assignedStaff
         );
       },
       (err) => {
@@ -86,7 +87,7 @@ describe('API Contract & Mock Backend Verification', () => {
   });
 
   test('Ticket QR payload contains strictly opaque ticket ID', async () => {
-    const res = await mockBackend.getTicketById('tkt-8f3a9e1b2c4d');
+    const res = await mockBackend.getTicketById('tkt-8f3a9e1b2c4d', { userId: 'usr-attendee-demo', role: 'ATTENDEE' });
     assert.ok(res.ticket);
     // Ticket ID must be an opaque string without embedded passwords or tokens
     assert.equal(typeof res.ticket.ticketId, 'string');
@@ -96,7 +97,7 @@ describe('API Contract & Mock Backend Verification', () => {
 });
 
 describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
-  const attendeeUser = {
+  const unassignedAttendee = {
     userId: 'usr-attendee-demo',
     email: 'chandrabhanu@example.com',
     name: 'Chandrabhanu Prusty',
@@ -117,27 +118,29 @@ describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
     role: 'ORGANIZER',
   };
 
+  // Assigned staff has global role ATTENDEE and is present in mockEventStaff
   const assignedCoordinator = {
     userId: 'usr-coordinator-01',
     email: 'coordinator.preeti@example.com',
     name: 'Preeti Coordinator',
-    role: 'COORDINATOR',
+    role: 'ATTENDEE',
   };
 
+  // Unassigned attendee has global role ATTENDEE and is NOT in mockEventStaff
   const unassignedCoordinator = {
     userId: 'usr-coordinator-02',
     email: 'coordinator.samir@example.com',
     name: 'Samir Coordinator',
-    role: 'COORDINATOR',
+    role: 'ATTENDEE',
   };
 
-  test('Attendee is strictly forbidden from checking in tickets', async () => {
+  test('Unassigned attendee is strictly forbidden from checking in tickets', async () => {
     await assert.rejects(
       async () => {
         await mockBackend.checkInTicket(
           'evt-ccl-hackathon-2026',
           'tkt-8f3a9e1b2c4d',
-          attendeeUser
+          unassignedAttendee
         );
       },
       (err) => {
@@ -146,10 +149,15 @@ describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
     );
   });
 
-  test('Attendee is forbidden from viewing private attendee list', async () => {
+  test('Organizer without explicit staff assignment cannot check in tickets', async () => {
+    // organizerOwner owns the event, but has not assigned themselves to mockEventStaff
     await assert.rejects(
       async () => {
-        await mockBackend.getAttendees('evt-ccl-hackathon-2026', '', attendeeUser);
+        await mockBackend.checkInTicket(
+          'evt-ccl-hackathon-2026',
+          'tkt-8f3a9e1b2c4d',
+          organizerOwner
+        );
       },
       (err) => {
         return err.status === 403 && err.error?.code === 'FORBIDDEN';
@@ -157,8 +165,19 @@ describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
     );
   });
 
-  test('Coordinator can only check in attendees for assigned events', async () => {
-    // Assigned to evt-ccl-hackathon-2026
+  test('Unassigned attendee is forbidden from viewing attendee list', async () => {
+    await assert.rejects(
+      async () => {
+        await mockBackend.getAttendees('evt-ccl-hackathon-2026', 'test', unassignedAttendee);
+      },
+      (err) => {
+        return err.status === 403 && err.error?.code === 'FORBIDDEN';
+      }
+    );
+  });
+
+  test('Assigned attendee coordinator can check in attendees for assigned event', async () => {
+    // Preeti is assigned to evt-ccl-hackathon-2026
     const res = await mockBackend.checkInTicket(
       'evt-ccl-hackathon-2026',
       'tkt-8f3a9e1b2c4d',
@@ -167,8 +186,8 @@ describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
     assert.equal(res.status, 'CHECKED_IN');
   });
 
-  test('Unassigned coordinator is rejected from check-in on unassigned event', async () => {
-    // unassignedCoordinator is NOT assigned to evt-ccl-hackathon-2026
+  test('Unassigned attendee is rejected from check-in on unassigned event', async () => {
+    // unassignedCoordinator is NOT in mockEventStaff for evt-ccl-hackathon-2026
     await assert.rejects(
       async () => {
         await mockBackend.checkInTicket(
@@ -183,6 +202,23 @@ describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
     );
   });
 
+  test('Assigned staff attendee search requires min 2 chars and returns masked emails', async () => {
+    // Missing query (<2 chars) fails for staff
+    await assert.rejects(
+      async () => {
+        await mockBackend.getAttendees('evt-ccl-hackathon-2026', '', assignedCoordinator);
+      },
+      (err) => {
+        return err.status === 400 && err.error?.code === 'QUERY_REQUIRED';
+      }
+    );
+
+    // Query with 2 chars succeeds and masks attendee email
+    const res = await mockBackend.getAttendees('evt-ccl-hackathon-2026', 'aarav', assignedCoordinator);
+    assert.ok(res.attendees.length > 0);
+    assert.ok(res.attendees[0].attendeeEmail.includes('***'));
+  });
+
   test('Organizer can assign and revoke coordinator check-in staff', async () => {
     // Assign Samir Coordinator to evt-ccl-hackathon-2026
     const assignRes = await mockBackend.assignCoordinator(
@@ -192,6 +228,7 @@ describe('Role-Based Access Control (RBAC) & Event Staff Scoping', () => {
     );
     assert.ok(assignRes.assignment);
     assert.equal(assignRes.assignment.email, 'coordinator.samir@example.com');
+    assert.equal(assignRes.assignment.permission, 'CHECK_IN');
 
     // Verify staff list includes Samir
     const staffRes = await mockBackend.getEventStaff('evt-ccl-hackathon-2026', organizerOwner);

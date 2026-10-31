@@ -12,8 +12,19 @@ This document specifies the exact logical and physical data model for Marque on 
 | `MarqueEvents` | `eventId` (S) | — | On-Demand | Campus events, schedules, capacity tallies, and organizer ownership |
 | `MarqueEventStaff` | `eventId` (S) | `userId` (S) | On-Demand | Event-scoped check-in staff delegations and instant revocations |
 | `MarqueRSVPs` | `eventId` (S) | `attendeeId` (S) | On-Demand | Participant registration state machine (`CONFIRMED`, `WAITLISTED`, `CANCELLED`) |
-| `MarqueWaitlist` | `eventId` (S) | `queueKey` (S) | On-Demand | FIFO queue with **strongly consistent** chronological ordering |
+| `MarqueWaitlist` | `eventId` (S) | `queueKey` (S) | On-Demand | FIFO queue with **strongly consistent** chronological ordering (active entries only) |
 | `MarqueTickets` | `ticketId` (S) | — | On-Demand | Opaque single-use passes and check-in audit logs |
+
+### Global Secondary Indexes (GSIs) Summary
+The architecture uses **exactly 6 GSIs** across the entire application:
+1. `MarqueEvents`: `status-startAt-index` (PK: `status`, SK: `startAt`)
+2. `MarqueEvents`: `organizer-index` (PK: `organizerId`, SK: `createdAt`)
+3. `MarqueEventStaff`: `user-assigned-events-index` (PK: `userId`, SK: `assignedAt`)
+4. `MarqueRSVPs`: `attendee-index` (PK: `attendeeId`, SK: `createdAt`)
+5. `MarqueTickets`: `event-attendees-index` (PK: `eventId`, SK: `attendeeName`)
+6. `MarqueTickets`: `attendee-tickets-index` (PK: `attendeeId`, SK: `eventId`)
+
+*(Note: `email-index` on `MarqueUsers` and `attendee-waitlist-index` on `MarqueWaitlist` are intentionally eliminated in favor of strongly consistent base table key lookups and direct key deletions.)*
 
 ---
 
@@ -38,11 +49,11 @@ Stores user profile credentials and houses atomic transactional email uniqueness
   - `itemType`: String (`LOCK`)
   - `ownerUserId`: String (Points to `usr-xxx`)
   - `createdAt`: String (ISO 8601 UTC)
-- **GSI `email-index`:**
-  - Partition Key: `normalizedEmail` (String)
-  - Sort Key: `itemType` (String)
-  - Projection: `ALL`
-  - Usage: Lookup during user sign-in and coordinator assignment.
+- **Email Lookup Strategy (No GSI Required):**
+  - Instead of maintaining an eventually consistent `email-index` GSI, lookup during authentication or coordinator assignment uses a **two-step strongly consistent base table read**:
+    1. Read Lock Item: `GetItem(TableName: "MarqueUsers", Key: { userId: "EMAIL#<normalizedEmail>", itemType: "LOCK" }, ConsistentRead: true)`. This returns `ownerUserId`.
+    2. Read Profile Item: `GetItem(TableName: "MarqueUsers", Key: { userId: ownerUserId, itemType: "PROFILE" }, ConsistentRead: true)`.
+  - Guarantees $O(1)$ strongly consistent lookup with zero replication delay and eliminates GSI provisioned/read costs.
 
 ---
 
@@ -108,6 +119,7 @@ Manages attendee registration state per event. Composite key guarantees at most 
   - `rsvpId`: String (Unique registration ID, e.g. `rsvp-xxx`)
   - `status`: String (`CONFIRMED` | `WAITLISTED` | `CANCELLED`)
   - `ticketId`: String (Nullable, present only if `status = "CONFIRMED"`)
+  - `queueKey`: String (Nullable, present only if `status = "WAITLISTED"`, e.g. `<ISO8601_TIMESTAMP>#<attendeeId>`)
   - `createdAt`: String (ISO 8601 UTC)
   - `updatedAt`: String (ISO 8601 UTC)
 - **GSI `attendee-index`:**
@@ -120,6 +132,7 @@ Manages attendee registration state per event. Composite key guarantees at most 
 
 ### 2.5 `MarqueWaitlist`
 Maintains the FIFO waiting queue for full events. Base table layout ensures **strongly consistent chronological queries** during seat reclamation.
+- **Lifecycle & Storage Invariant:** `MarqueWaitlist` contains **only active waiting entries**. When an entry is promoted to confirmed or cancelled by the attendee, it is transactionally **deleted** from the table.
 - **Partition Key (`PK`):** `eventId` (String)
 - **Sort Key (`SK`):** `queueKey` (String: `<ISO8601_TIMESTAMP>#<attendeeId>`)
 - **Attributes:**
@@ -128,14 +141,14 @@ Maintains the FIFO waiting queue for full events. Base table layout ensures **st
   - `attendeeId`: String (User ID of the waitlisted attendee)
   - `attendeeName`: String (Cached name for promotion log)
   - `attendeeEmail`: String (Cached email)
-  - `status`: String (`WAITING` | `PROMOTED` | `CANCELLED`)
+  - `status`: String (`WAITING`)
   - `createdAt`: String (ISO 8601 UTC)
-  - `updatedAt`: String (ISO 8601 UTC)
-- **GSI `attendee-waitlist-index`:**
-  - Partition Key: `attendeeId` (String)
-  - Sort Key: `eventId` (String)
-  - Projection: `ALL`
-  - Usage: Locates a user's active waitlist entry during self-cancellation.
+- **Oldest Waitlist Entry Retrieval (FIFO):**
+  - Strongly consistent query: `Query(TableName: "MarqueWaitlist", KeyConditionExpression: "eventId = :eventId", ScanIndexForward: true, Limit: 1, ConsistentRead: true)`.
+  - **No filter expression required** because all items in `MarqueWaitlist` are active waiting entries.
+- **Self-Cancellation Without GSI:**
+  - When an attendee cancels their waitlisted registration, `MarqueRSVPs` already contains their `queueKey`. The backend executes a direct strongly consistent base table delete: `DeleteItem(TableName: "MarqueWaitlist", Key: { eventId, queueKey })`.
+  - Eliminates `attendee-waitlist-index`.
 
 ---
 
@@ -173,7 +186,7 @@ Stores single-use opaque digital passes. Contains strictly no JWTs, passwords, o
 
 | Pattern ID | Access Pattern Description | Target Table / GSI | Key Condition Expression | Filter Expression / Projection | Consistency Model |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **AP-01** | Find user by normalized email (Login / Assign) | `MarqueUsers` (`email-index`) | `normalizedEmail = :email AND itemType = :profile` | None (Projection: ALL) | Eventually Consistent |
+| **AP-01** | Find user by normalized email (Login / Assign) | `MarqueUsers` (Base Table) | Step 1: `userId = 'EMAIL#' + :email AND itemType = 'LOCK'`<br>Step 2: `userId = :ownerUserId AND itemType = 'PROFILE'` | None | **Strongly Consistent** |
 | **AP-02** | Get user profile by userId | `MarqueUsers` | `userId = :userId AND itemType = 'PROFILE'` | None | Strongly Consistent |
 | **AP-03** | List published upcoming events | `MarqueEvents` (`status-startAt-index`) | `status = 'PUBLISHED' AND startAt >= :now` | Optional category filter | Eventually Consistent |
 | **AP-04** | Get single event details | `MarqueEvents` | `eventId = :eventId` | None | Strongly Consistent |
@@ -183,7 +196,7 @@ Stores single-use opaque digital passes. Contains strictly no JWTs, passwords, o
 | **AP-08** | List events assigned to coordinator | `MarqueEventStaff` (`user-assigned-events-index`) | `userId = :userId` | None | Eventually Consistent |
 | **AP-09** | List attendee's registrations (My RSVPs) | `MarqueRSVPs` (`attendee-index`) | `attendeeId = :userId` | None | Eventually Consistent |
 | **AP-10** | Get attendee's specific event RSVP | `MarqueRSVPs` | `eventId = :eventId AND attendeeId = :userId` | None | Strongly Consistent |
-| **AP-11** | Retrieve oldest waitlisted attendee (FIFO) | `MarqueWaitlist` (Base Table) | `eventId = :eventId` (`ScanIndexForward = true`, `Limit = 1`) | `status = 'WAITING'` | **Strongly Consistent** |
+| **AP-11** | Retrieve oldest waitlisted attendee (FIFO) | `MarqueWaitlist` (Base Table) | `eventId = :eventId` (`ScanIndexForward = true`, `Limit = 1`) | None (active items only) | **Strongly Consistent** |
 | **AP-12** | Get ticket by opaque ID | `MarqueTickets` | `ticketId = :ticketId` | None | Strongly Consistent |
 | **AP-13** | Search attendees for check-in | `MarqueTickets` (`event-attendees-index`) | `eventId = :eventId` | `begins_with(attendeeName, :q) OR contains(attendeeEmail, :q) OR ticketId = :q` | Eventually Consistent |
 
@@ -287,6 +300,46 @@ To guarantee that `confirmedCount` never exceeds `capacity` under concurrent req
 ```
 *Concurrency Guarantee:* If 50 users contest the last available seat, exactly 1 update succeeds on `MarqueEvents`. The remaining 49 transactions are cancelled due to condition failure (`confirmedCount < capacity`). The backend catches this condition and safely routes them to the waitlist.
 
+#### Joining the Waitlist
+When capacity is exhausted, the user joins the waitlist. `queueKey` is generated as `<ISO8601_TIMESTAMP>#<attendeeId>`:
+```json
+{
+  "TransactItems": [
+    {
+      "Put": {
+        "TableName": "MarqueWaitlist",
+        "Item": {
+          "eventId": { "S": "evt-ccl-hackathon-2026" },
+          "queueKey": { "S": "2026-10-31T12:01:00.000Z#usr-waitlist-01" },
+          "attendeeId": { "S": "usr-waitlist-01" },
+          "attendeeName": { "S": "Aarav Sharma" },
+          "attendeeEmail": { "S": "aarav.sharma@example.com" },
+          "status": { "S": "WAITING" },
+          "createdAt": { "S": "2026-10-31T12:01:00.000Z" }
+        },
+        "ConditionExpression": "attribute_not_exists(queueKey)"
+      }
+    },
+    {
+      "Put": {
+        "TableName": "MarqueRSVPs",
+        "Item": {
+          "eventId": { "S": "evt-ccl-hackathon-2026" },
+          "attendeeId": { "S": "usr-waitlist-01" },
+          "rsvpId": { "S": "rsvp-waitlist-01" },
+          "status": { "S": "WAITLISTED" },
+          "queueKey": { "S": "2026-10-31T12:01:00.000Z#usr-waitlist-01" },
+          "createdAt": { "S": "2026-10-31T12:01:00.000Z" }
+        },
+        "ConditionExpression": "attribute_not_exists(attendeeId) OR #status = :cancelled",
+        "ExpressionAttributeNames": { "#status": "status" },
+        "ExpressionAttributeValues": { ":cancelled": { "S": "CANCELLED" } }
+      }
+    }
+  ]
+}
+```
+
 ---
 
 ### 4.3 Cancellation & Deterministic FIFO Promotion (`DELETE /api/events/{eventId}/rsvp`)
@@ -302,7 +355,7 @@ To guarantee that `confirmedCount` never exceeds `capacity` under concurrent req
              "eventId": { "S": "evt-ccl-hackathon-2026" },
              "attendeeId": { "S": "usr-cancelling-attendee" }
            },
-           "UpdateExpression": "SET #status = :cancelled, updatedAt = :now",
+           "UpdateExpression": "SET #status = :cancelled, updatedAt = :now REMOVE ticketId, queueKey",
            "ConditionExpression": "#status = :confirmed",
            "ExpressionAttributeNames": { "#status": "status" },
            "ExpressionAttributeValues": {
@@ -326,20 +379,13 @@ To guarantee that `confirmedCount` never exceeds `capacity` under concurrent req
          }
        },
        {
-         "Update": {
+         "Delete": {
            "TableName": "MarqueWaitlist",
            "Key": {
              "eventId": { "S": "evt-ccl-hackathon-2026" },
              "queueKey": { "S": "2026-10-19T14:30:00.000Z#usr-waitlist-01" }
            },
-           "UpdateExpression": "SET #status = :promoted, updatedAt = :now",
-           "ConditionExpression": "#status = :waiting",
-           "ExpressionAttributeNames": { "#status": "status" },
-           "ExpressionAttributeValues": {
-             ":promoted": { "S": "PROMOTED" },
-             ":waiting": { "S": "WAITING" },
-             ":now": { "S": "2026-10-31T12:05:00.000Z" }
-           }
+           "ConditionExpression": "attribute_exists(queueKey)"
          }
        },
        {
@@ -349,7 +395,7 @@ To guarantee that `confirmedCount` never exceeds `capacity` under concurrent req
              "eventId": { "S": "evt-ccl-hackathon-2026" },
              "attendeeId": { "S": "usr-waitlist-01" }
            },
-           "UpdateExpression": "SET #status = :confirmed, ticketId = :newTicketId, updatedAt = :now",
+           "UpdateExpression": "SET #status = :confirmed, ticketId = :newTicketId, updatedAt = :now REMOVE queueKey",
            "ConditionExpression": "#status = :waitlisted",
            "ExpressionAttributeNames": { "#status": "status" },
            "ExpressionAttributeValues": {
@@ -378,9 +424,14 @@ To guarantee that `confirmedCount` never exceeds `capacity` under concurrent req
      ]
    }
    ```
-   *Double-Promotion Prevention:* Notice condition `#status = :waiting` on `MarqueWaitlist`. If two cancellations occur simultaneously, both query the same top waitlist candidate, but only one transaction can successfully change status from `WAITING` to `PROMOTED`. The conflicting transaction fails, safely retries, queries the *second* candidate in line, and promotes them.
+   *Double-Promotion Prevention:* Notice condition `attribute_exists(queueKey)` on `MarqueWaitlist`. If two cancellations occur simultaneously, both query the same top waitlist candidate, but only one transaction can successfully delete the item from `MarqueWaitlist`. The conflicting transaction fails condition, safely retries, queries the *second* candidate in line, and promotes them.
 3. **If waitlist is empty:**
    The transaction cancels the RSVP/ticket and atomically decrements `MarqueEvents.confirmedCount` with condition `confirmedCount > 0`.
+4. **Self-Cancellation by Waitlisted Attendee:**
+   When a waitlisted attendee cancels their own RSVP, the backend uses their `queueKey` stored in `MarqueRSVPs` to perform an atomic transaction:
+   - `Update` on `MarqueRSVPs` setting `status = 'CANCELLED'` and removing `queueKey`.
+   - `Delete` on `MarqueWaitlist` for `Key: { eventId, queueKey }`.
+   This requires no GSI and operates with strongly consistent base table writes.
 
 ---
 

@@ -8,11 +8,7 @@ import { apiRequest } from './apiClient';
 export async function getEvents(params = {}) {
   const query = new URLSearchParams();
   if (params.q) query.append('q', params.q);
-  if (params.category) query.append('category', params.category);
-  if (params.from) query.append('from', params.from);
-  if (params.to) query.append('to', params.to);
-  if (params.limit) query.append('limit', params.limit);
-  if (params.nextToken) query.append('nextToken', params.nextToken);
+  if (params.category && params.category !== 'All') query.append('category', params.category);
 
   const qs = query.toString();
   return apiRequest(`/api/events${qs ? `?${qs}` : ''}`);

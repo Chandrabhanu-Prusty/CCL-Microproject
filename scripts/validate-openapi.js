@@ -1,5 +1,7 @@
 const fs = require('fs');
+const { execSync } = require('child_process');
 
+console.log('--- Step 1: Validating internal $ref targets ---');
 const content = fs.readFileSync('docs/openapi.yaml', 'utf8');
 
 const regex = /\$ref:\s*['"]?#\/components\/([^'"\s]+)['"]?/g;
@@ -25,3 +27,16 @@ if (missing.length > 0) {
   console.log('All $ref targets verified successfully!');
 }
 
+console.log('\n--- Step 2: Validating OpenAPI 3.1 specification via Redocly CLI ---');
+try {
+  const output = execSync('npx --yes @redocly/cli lint docs/openapi.yaml', {
+    encoding: 'utf8',
+    stdio: 'pipe'
+  });
+  console.log(output);
+  console.log('Redocly linting passed with 0 errors/warnings!');
+} catch (error) {
+  console.error('Redocly linting failed:');
+  console.error(error.stdout || error.message);
+  process.exit(1);
+}

@@ -3,7 +3,7 @@
  * Reads base URL dynamically from VITE_API_BASE_URL.
  * Uses mock adapter ONLY when mock mode is explicitly enabled (VITE_USE_MOCK_API=true).
  * When VITE_API_BASE_URL is configured, performs real HTTP requests and never falls back to mock data.
- * Conforms to API_CONTRACT.md standard error format: { error: { code, message } }
+ * Conforms to API_CONTRACT.md standard error format: { error: { code, message, details } }
  */
 
 import { getAuthHeaders, getUser } from '../auth/authHelpers.js';
@@ -102,9 +102,9 @@ async function handleMockRequest(endpoint, options = {}) {
     if (!email || !password) {
       throw { status: 400, code: 'VALIDATION_ERROR', message: 'Email and password required.' };
     }
-    // Determine demo role from email or default to ATTENDEE
+    // Global roles are strictly ATTENDEE and ORGANIZER only.
     let role = 'ATTENDEE';
-    let userId = `usr-attendee-demo`;
+    let userId = 'usr-attendee-demo';
     let name = 'Chandrabhanu Prusty';
 
     if (email.includes('organizer')) {
@@ -112,7 +112,8 @@ async function handleMockRequest(endpoint, options = {}) {
       userId = 'usr-organizer-01';
       name = 'Neilsen Organizer';
     } else if (email.includes('coordinator')) {
-      role = 'COORDINATOR';
+      // Coordinator is an ATTENDEE holding event-specific CHECK_IN staff assignments
+      role = 'ATTENDEE';
       userId = 'usr-coordinator-01';
       name = 'Preeti Coordinator';
     }
@@ -184,6 +185,12 @@ async function handleMockRequest(endpoint, options = {}) {
       return mockBackend.getEventStats(eventId, user);
     }
 
+    // Coordinator check-in summary: /api/events/:eventId/checkin-summary
+    if (parts.length === 5 && parts[4] === 'checkin-summary' && method === 'GET') {
+      const eventId = parts[3];
+      return mockBackend.getCheckinSummary(eventId, user);
+    }
+
     // Single event: /api/events/:eventId
     if (parts.length === 4 && parts[3]) {
       const eventId = parts[3];
@@ -235,6 +242,22 @@ async function handleMockRequest(endpoint, options = {}) {
   if (endpoint.match(/\/api\/events\/[^/]+\/check-in/) && method === 'POST') {
     const eventId = endpoint.split('/')[3];
     return mockBackend.checkInTicket(eventId, body.ticketId, user);
+  }
+
+  // Presigned banner upload
+  if (endpoint === '/api/uploads/banner-url' && method === 'POST') {
+    if (user?.role !== 'ORGANIZER') {
+      throw { status: 403, code: 'FORBIDDEN', message: 'Organizer permission required for banner uploads.' };
+    }
+    const { fileName, contentType } = body;
+    const allowed = ['image/jpeg', 'image/png', 'image/webp'];
+    if (!allowed.includes(contentType)) {
+      throw { status: 400, code: 'INVALID_CONTENT_TYPE', message: 'Allowed banner formats are image/jpeg, image/png, image/webp.' };
+    }
+    return {
+      uploadUrl: `https://mock-s3-upload.amazonaws.com/raw/${encodeURIComponent(fileName)}`,
+      bannerUrl: `https://mock-s3-upload.amazonaws.com/banners/${encodeURIComponent(fileName)}`,
+    };
   }
 
   // Helper methods on apiClient

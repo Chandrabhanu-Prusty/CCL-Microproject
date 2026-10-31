@@ -84,20 +84,20 @@ let mockEvents = [
   }
 ];
 
-// Initial mock staff (MarqueEventStaff representation)
+// Initial mock staff (MarqueEventStaff representation: eventId + userId)
 let mockEventStaff = [
   {
     eventId: 'evt-ccl-hackathon-2026',
     userId: 'usr-coordinator-01',
     email: 'coordinator.preeti@example.com',
     name: 'Preeti Coordinator',
-    role: 'COORDINATOR',
+    permission: 'CHECK_IN',
     assignedAt: '2026-10-12T10:00:00Z',
     assignedBy: 'usr-organizer-01',
   }
 ];
 
-// Registered mock users database for lookup / assignment
+// Registered mock users database (Global roles: strictly ATTENDEE and ORGANIZER only)
 let mockUsers = [
   {
     userId: 'usr-attendee-demo',
@@ -121,13 +121,13 @@ let mockUsers = [
     userId: 'usr-coordinator-01',
     email: 'coordinator.preeti@example.com',
     name: 'Preeti Coordinator',
-    role: 'COORDINATOR',
+    role: 'ATTENDEE', // Global role is ATTENDEE; staff assignment grants CHECK_IN
   },
   {
     userId: 'usr-coordinator-02',
     email: 'coordinator.samir@example.com',
     name: 'Samir Coordinator',
-    role: 'COORDINATOR',
+    role: 'ATTENDEE', // Global role is ATTENDEE
   }
 ];
 
@@ -147,6 +147,7 @@ let mockRsvps = [
     eventId: 'evt-gdg-devfest',
     attendeeId: 'usr-attendee-demo',
     status: 'WAITLISTED',
+    queueKey: '2026-10-19T14:30:00Z#usr-attendee-demo',
     queuePosition: 1,
     createdAt: '2026-10-19T14:30:00Z',
     updatedAt: '2026-10-19T14:30:00Z',
@@ -194,22 +195,31 @@ let mockTickets = [
     status: 'CHECKED_IN',
     issuedAt: '2026-10-18T09:15:00Z',
     checkedInAt: '2026-11-15T09:15:00Z',
-    checkedInBy: 'usr-coordinator-01',
+    checkedInBy: 'Preeti Coordinator',
   }
 ];
 
+// MarqueWaitlist base table: stores ONLY active WAITING items
 let mockWaitlist = [
   {
     eventId: 'evt-gdg-devfest',
+    queueKey: '2026-10-19T14:30:00Z#usr-attendee-demo',
     attendeeId: 'usr-attendee-demo',
     attendeeName: 'Chandrabhanu Prusty',
     attendeeEmail: 'chandrabhanu@example.com',
-    queueKey: '2026-10-19T14:30:00Z#usr-attendee-demo',
-    queuePosition: 1,
     status: 'WAITING',
     createdAt: '2026-10-19T14:30:00Z',
+    updatedAt: '2026-10-19T14:30:00Z',
   }
 ];
+
+// Helper to mask email address for coordinator search results
+function maskEmail(email) {
+  if (!email || !email.includes('@')) return email;
+  const [local, domain] = email.split('@');
+  if (local.length <= 2) return `${local[0]}***@${domain}`;
+  return `${local.slice(0, 2)}***@${domain}`;
+}
 
 // Helper to simulate network latency for realistic UX states
 const delay = (ms = 180) => new Promise(res => setTimeout(res, ms));
@@ -310,30 +320,25 @@ export const mockBackend = {
       throw { status: 400, error: { code: 'INVALID_EMAIL', message: 'Coordinator email is required.' } };
     }
 
+    // Lookup user in mockUsers - user MUST exist beforehand!
+    const foundUser = mockUsers.find(u => u.email.toLowerCase() === cleanEmail);
+    if (!foundUser) {
+      throw { status: 400, error: { code: 'USER_NOT_FOUND', message: `No registered account found with email ${cleanEmail}.` } };
+    }
+
     // Check if already assigned
-    const existing = mockEventStaff.find(s => s.eventId === eventId && s.email.toLowerCase() === cleanEmail);
+    const existing = mockEventStaff.find(s => s.eventId === eventId && s.userId === foundUser.userId);
     if (existing) {
       throw { status: 409, error: { code: 'ALREADY_ASSIGNED', message: 'User is already assigned as a coordinator for this event.' } };
     }
 
-    // Lookup user in mockUsers or create coordinator record
-    let foundUser = mockUsers.find(u => u.email.toLowerCase() === cleanEmail);
-    if (!foundUser) {
-      foundUser = {
-        userId: `usr-coord-${Date.now().toString(36)}`,
-        email: cleanEmail,
-        name: cleanEmail.split('@')[0].replace(/[._-]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
-        role: 'COORDINATOR',
-      };
-      mockUsers.push(foundUser);
-    }
-
+    // Staff assignment grants permission: 'CHECK_IN' and does NOT mutate global role
     const assignment = {
       eventId,
       userId: foundUser.userId,
       email: foundUser.email,
       name: foundUser.name,
-      role: 'COORDINATOR',
+      permission: 'CHECK_IN',
       assignedAt: new Date().toISOString(),
       assignedBy: user.userId,
     };
@@ -355,21 +360,26 @@ export const mockBackend = {
       throw { status: 404, error: { code: 'STAFF_NOT_FOUND', message: 'Coordinator assignment not found.' } };
     }
     mockEventStaff.splice(idx, 1);
-    return { message: 'Coordinator removed successfully.' };
+    return { message: 'Coordinator assignment successfully revoked.' };
   },
 
+  // Returns actual staff assignments from mockEventStaff (explicit delegation rule)
   async getAssignedEvents(user) {
     await delay();
     if (!user) {
       throw { status: 401, error: { code: 'UNAUTHORIZED', message: 'Sign in required.' } };
     }
-    // Find all events where this user is assigned in mockEventStaff
+    // Only return events where user holds an explicit record in mockEventStaff
     const assignedIds = mockEventStaff.filter(s => s.userId === user.userId).map(s => s.eventId);
-    // Organizers also have access to events they own
-    const ownedIds = mockEvents.filter(e => e.organizerId === user.userId).map(e => e.eventId);
-    const combinedIds = Array.from(new Set([...assignedIds, ...ownedIds]));
-
-    const assignedEvents = mockEvents.filter(e => combinedIds.includes(e.eventId));
+    const assignedEvents = mockEvents
+      .filter(e => assignedIds.includes(e.eventId))
+      .map(e => ({
+        eventId: e.eventId,
+        title: e.title,
+        venue: e.venue,
+        startAt: e.startAt,
+        confirmedCount: e.confirmedCount,
+      }));
     return { events: assignedEvents };
   },
 
@@ -384,7 +394,7 @@ export const mockBackend = {
       throw { status: 404, error: { code: 'EVENT_NOT_FOUND', message: 'Event not found.' } };
     }
 
-    // Check duplicate
+    // Check duplicate active registration
     const existingRsvp = mockRsvps.find(r => r.eventId === eventId && r.attendeeId === user.userId && r.status !== 'CANCELLED');
     if (existingRsvp) {
       throw { status: 409, error: { code: 'DUPLICATE_REGISTRATION', message: 'You have already registered for this event.' } };
@@ -428,28 +438,33 @@ export const mockBackend = {
         status: 'CONFIRMED',
         rsvpId,
         ticketId,
+        message: 'Registration confirmed. Your digital pass is available.',
       };
     } else {
-      // Event full -> enter waitlist
-      const eventWaitlist = mockWaitlist.filter(w => w.eventId === eventId && w.status === 'WAITING');
+      // Event full -> enter FIFO waitlist
+      const eventWaitlist = mockWaitlist.filter(w => w.eventId === eventId);
       const queuePosition = eventWaitlist.length + 1;
+      const queueKey = `${new Date().toISOString()}#${user.userId}`;
+
       const newWaitlist = {
         eventId,
+        queueKey,
         attendeeId: user.userId,
         attendeeName: user.name,
         attendeeEmail: user.email,
-        queueKey: `${new Date().toISOString()}#${user.userId}`,
-        queuePosition,
         status: 'WAITING',
         createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       };
       mockWaitlist.push(newWaitlist);
 
+      // Store queueKey in RSVP record for direct strongly consistent lookup
       const newRsvp = {
         rsvpId,
         eventId,
         attendeeId: user.userId,
         status: 'WAITLISTED',
+        queueKey,
         queuePosition,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -460,6 +475,7 @@ export const mockBackend = {
         status: 'WAITLISTED',
         rsvpId,
         queuePosition,
+        message: 'Event is currently full. You have been placed in the FIFO waitlist.',
       };
     }
   },
@@ -471,10 +487,12 @@ export const mockBackend = {
     }
     const rsvpIdx = mockRsvps.findIndex(r => r.eventId === eventId && r.attendeeId === user.userId && r.status !== 'CANCELLED');
     if (rsvpIdx === -1) {
-      throw { status: 404, error: { code: 'RSVP_NOT_FOUND', message: 'Active registration not found.' } };
+      throw { status: 404, error: { code: 'RSVP_NOT_FOUND', message: 'Active registration not found for this event.' } };
     }
     const prevStatus = mockRsvps[rsvpIdx].status;
     const oldTicketId = mockRsvps[rsvpIdx].ticketId;
+    const oldQueueKey = mockRsvps[rsvpIdx].queueKey;
+
     mockRsvps[rsvpIdx].status = 'CANCELLED';
     mockRsvps[rsvpIdx].updatedAt = new Date().toISOString();
 
@@ -483,17 +501,31 @@ export const mockBackend = {
       if (tkt) tkt.status = 'CANCELLED';
     }
 
+    // If cancelling a WAITLISTED RSVP, delete from mockWaitlist directly by queueKey
+    if (prevStatus === 'WAITLISTED' && oldQueueKey) {
+      const wlIdx = mockWaitlist.findIndex(w => w.eventId === eventId && w.queueKey === oldQueueKey);
+      if (wlIdx !== -1) {
+        mockWaitlist.splice(wlIdx, 1);
+      }
+      return { message: 'Waitlist registration successfully cancelled.' };
+    }
+
     const event = mockEvents.find(e => e.eventId === eventId);
     let promotedAttendee = null;
 
     if (prevStatus === 'CONFIRMED' && event) {
-      // Check for waiting attendees in FIFO order
-      const waiting = mockWaitlist.filter(w => w.eventId === eventId && w.status === 'WAITING')
+      // Strongly consistent base table query: get oldest entry with Limit = 1 (no status filter needed since table only holds active waiting entries)
+      const waiting = mockWaitlist
+        .filter(w => w.eventId === eventId)
         .sort((a, b) => a.queueKey.localeCompare(b.queueKey));
 
       if (waiting.length > 0) {
+        // Take and remove oldest waitlist entry transactionally
         const nextInLine = waiting[0];
-        nextInLine.status = 'PROMOTED';
+        const wlIdx = mockWaitlist.findIndex(w => w.eventId === eventId && w.queueKey === nextInLine.queueKey);
+        if (wlIdx !== -1) {
+          mockWaitlist.splice(wlIdx, 1);
+        }
 
         // Update attendee's RSVP from WAITLISTED to CONFIRMED
         const targetRsvp = mockRsvps.find(r => r.eventId === eventId && r.attendeeId === nextInLine.attendeeId && r.status === 'WAITLISTED');
@@ -501,6 +533,7 @@ export const mockBackend = {
         if (targetRsvp) {
           targetRsvp.status = 'CONFIRMED';
           targetRsvp.ticketId = promotedTicketId;
+          targetRsvp.queueKey = null;
           targetRsvp.updatedAt = new Date().toISOString();
         }
 
@@ -544,7 +577,7 @@ export const mockBackend = {
       const event = mockEvents.find(e => e.eventId === r.eventId);
       return {
         ...r,
-        event: event || { title: 'Unknown Event', venue: 'Campus', startAt: new Date().toISOString() },
+        event: event ? { title: event.title, venue: event.venue, startAt: event.startAt } : { title: 'Unknown Event', venue: 'Campus', startAt: new Date().toISOString() },
       };
     });
     return { rsvps: enriched };
@@ -557,49 +590,58 @@ export const mockBackend = {
     if (!ticket) {
       throw { status: 404, error: { code: 'TICKET_NOT_FOUND', message: 'Ticket not found.' } };
     }
-    // Attendees can only view their own tickets. Coordinators/Organizers assigned can also view.
-    if (user && user.role === 'ATTENDEE' && ticket.attendeeId !== user.userId) {
+    // Only the ticket owner can view their full ticket details
+    if (user && ticket.attendeeId !== user.userId) {
       throw { status: 403, error: { code: 'FORBIDDEN', message: 'Attendees can only view their own digital tickets.' } };
     }
     return { ticket };
   },
 
-  // Check-In and Attendees (Coordinator / Organizer verification)
+  // Check-In and Attendees (explicit staff assignment or event owner verification)
   async getAttendees(eventId, query = '', user) {
     await delay();
-    // Verify user authorization: must be event owner or assigned coordinator
     const event = mockEvents.find(e => e.eventId === eventId);
     if (!event) {
       throw { status: 404, error: { code: 'EVENT_NOT_FOUND', message: 'Event not found.' } };
     }
     const isOwner = event.organizerId === user?.userId;
-    const isAssignedCoord = mockEventStaff.some(s => s.eventId === eventId && s.userId === user?.userId);
+    const isAssignedStaff = mockEventStaff.some(s => s.eventId === eventId && s.userId === user?.userId);
 
-    if (user && !isOwner && !isAssignedCoord) {
-      throw { status: 403, error: { code: 'FORBIDDEN', message: 'You are not assigned as a coordinator or owner for this event.' } };
+    // Caller must be event owner OR explicitly assigned staff in mockEventStaff
+    if (!isOwner && !isAssignedStaff) {
+      throw { status: 403, error: { code: 'FORBIDDEN', message: 'You do not have permission to view attendees for this event.' } };
     }
 
-    const qLower = query.toLowerCase().trim();
+    const qTrimmed = query.trim();
+    // Coordinators (assigned staff who are not the owner) MUST supply query with min 2 characters
+    if (!isOwner && qTrimmed.length < 2) {
+      throw { status: 400, error: { code: 'QUERY_REQUIRED', message: 'Coordinators must supply a search query of at least 2 characters.' } };
+    }
+
+    const qLower = qTrimmed.toLowerCase();
     const tickets = mockTickets.filter(t => t.eventId === eventId);
-    const results = tickets
-      .filter(t => {
-        if (!qLower) return true;
-        return (
-          t.attendeeName.toLowerCase().includes(qLower) ||
-          t.attendeeEmail.toLowerCase().includes(qLower) ||
-          t.ticketId.toLowerCase().includes(qLower)
-        );
-      })
-      .map(t => ({
-        ticketId: t.ticketId,
-        attendeeName: t.attendeeName,
-        attendeeEmail: t.attendeeEmail,
-        status: t.status,
-        checkedInAt: t.checkedInAt,
-      }));
+    const filtered = tickets.filter(t => {
+      if (!qLower) return true;
+      return (
+        t.attendeeName.toLowerCase().includes(qLower) ||
+        t.attendeeEmail.toLowerCase().includes(qLower) ||
+        t.ticketId.toLowerCase().includes(qLower)
+      );
+    });
+
+    const results = filtered.map(t => ({
+      ticketId: t.ticketId,
+      attendeeName: t.attendeeName,
+      // Mask email for coordinators; owners see unmasked email
+      attendeeEmail: isOwner ? t.attendeeEmail : maskEmail(t.attendeeEmail),
+      status: t.status,
+      checkedInAt: t.checkedInAt,
+    }));
+
     return { attendees: results };
   },
 
+  // Single-use Check-in: requires EXPLICIT assignment in mockEventStaff
   async checkInTicket(eventId, ticketId, user) {
     await delay();
     const event = mockEvents.find(e => e.eventId === eventId);
@@ -607,15 +649,9 @@ export const mockBackend = {
       throw { status: 404, error: { code: 'EVENT_NOT_FOUND', message: 'Event not found.' } };
     }
 
-    // Role & assignment check: Attendee is strictly rejected
-    if (user?.role === 'ATTENDEE') {
-      throw { status: 403, error: { code: 'FORBIDDEN', message: 'Attendees are strictly prohibited from checking in tickets.' } };
-    }
-
-    const isOwner = event.organizerId === user?.userId;
-    const isAssignedCoord = mockEventStaff.some(s => s.eventId === eventId && s.userId === user?.userId);
-
-    if (user && !isOwner && !isAssignedCoord) {
+    // Strict Rule: require an explicit MarqueEventStaff assignment, INCLUDING for an organizer
+    const isAssignedStaff = mockEventStaff.some(s => s.eventId === eventId && s.userId === user?.userId);
+    if (!isAssignedStaff) {
       throw { status: 403, error: { code: 'FORBIDDEN', message: 'Access denied: You are not assigned to check in attendees for this event.' } };
     }
 
@@ -642,7 +678,7 @@ export const mockBackend = {
     // Mark checked in
     ticket.status = 'CHECKED_IN';
     ticket.checkedInAt = new Date().toISOString();
-    ticket.checkedInBy = user?.name || user?.userId || 'coord-staff';
+    ticket.checkedInBy = user?.name || 'Coordinator';
 
     return {
       status: 'CHECKED_IN',
@@ -654,22 +690,21 @@ export const mockBackend = {
     };
   },
 
+  // Full analytics: strictly event owner (ORGANIZER) only
   async getEventStats(eventId, user) {
     await delay();
     const event = mockEvents.find(e => e.eventId === eventId);
     if (!event) {
       throw { status: 404, error: { code: 'EVENT_NOT_FOUND', message: 'Event not found.' } };
     }
-    // Only event owner or assigned coordinator can view private stats
     const isOwner = event.organizerId === user?.userId;
-    const isAssignedCoord = mockEventStaff.some(s => s.eventId === eventId && s.userId === user?.userId);
-    if (user && !isOwner && !isAssignedCoord) {
-      throw { status: 403, error: { code: 'FORBIDDEN', message: 'Access denied to event statistics.' } };
+    if (user?.role !== 'ORGANIZER' || !isOwner) {
+      throw { status: 403, error: { code: 'FORBIDDEN', message: 'Only the event owner can view full event statistics.' } };
     }
 
     const tickets = mockTickets.filter(t => t.eventId === eventId);
     const checkedInCount = tickets.filter(t => t.status === 'CHECKED_IN').length;
-    const waitlistCount = mockWaitlist.filter(w => w.eventId === eventId && w.status === 'WAITING').length;
+    const waitlistCount = mockWaitlist.filter(w => w.eventId === eventId).length;
     const confirmedCount = event.confirmedCount;
     const attendancePercentage = confirmedCount > 0 ? Math.round((checkedInCount / confirmedCount) * 100) : 0;
 
@@ -679,6 +714,27 @@ export const mockBackend = {
       waitlistCount,
       checkedInCount,
       attendancePercentage,
+    };
+  },
+
+  // Coordinator check-in summary: requires explicit staff assignment
+  async getCheckinSummary(eventId, user) {
+    await delay();
+    const event = mockEvents.find(e => e.eventId === eventId);
+    if (!event) {
+      throw { status: 404, error: { code: 'EVENT_NOT_FOUND', message: 'Event not found.' } };
+    }
+    const isAssignedStaff = mockEventStaff.some(s => s.eventId === eventId && s.userId === user?.userId);
+    const isOwner = event.organizerId === user?.userId;
+    if (!isAssignedStaff && !isOwner) {
+      throw { status: 403, error: { code: 'FORBIDDEN', message: 'Access denied to event check-in summary.' } };
+    }
+
+    const tickets = mockTickets.filter(t => t.eventId === eventId);
+    const checkedInCount = tickets.filter(t => t.status === 'CHECKED_IN').length;
+    return {
+      confirmedCount: event.confirmedCount,
+      checkedInCount,
     };
   }
 };
