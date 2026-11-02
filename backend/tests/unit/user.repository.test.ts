@@ -63,7 +63,7 @@ describe('UserRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.equal(putLock.ConditionExpression, 'attribute_not_exists(userId)');
   });
 
-  test('createWithEmailLock throws 409 EMAIL_ALREADY_EXISTS on transaction cancellation', async () => {
+  test('createWithEmailLock throws 409 EMAIL_ALREADY_EXISTS when email-lock condition fails (index 1)', async () => {
     resetEnvCache();
     getEnv(testEnv);
 
@@ -96,6 +96,81 @@ describe('UserRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
         assert.equal(err.code, 'EMAIL_ALREADY_EXISTS');
         assert.equal(err.statusCode, 409);
         assert.equal(err.message, 'An account with this email address already exists.');
+        return true;
+      }
+    );
+  });
+
+  test('createWithEmailLock throws 409 USER_ALREADY_EXISTS when profile-key condition fails (index 0)', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockDocClient = {
+      send: async () => {
+        const error = new Error('Transaction cancelled');
+        error.name = 'TransactionCanceledException';
+        (error as any).CancellationReasons = [
+          { Code: 'ConditionalCheckFailed' }, // Profile key collision
+          { Code: 'None' },
+        ];
+        throw error;
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new UserRepository(mockDocClient);
+    await assert.rejects(
+      async () => {
+        await repo.createWithEmailLock({
+          userId: 'usr-duplicate-id',
+          name: 'Existing User',
+          email: 'newemail@vesit.edu',
+          normalizedEmail: 'newemail@vesit.edu',
+          passwordHash: 'hashed_password_sample',
+          role: 'ATTENDEE',
+        });
+      },
+      (err: any) => {
+        assert.equal(err instanceof ConflictError, true);
+        assert.equal(err.code, 'USER_ALREADY_EXISTS');
+        assert.equal(err.statusCode, 409);
+        assert.equal(err.message, 'A user profile with this ID already exists.');
+        return true;
+      }
+    );
+  });
+
+  test('createWithEmailLock throws 409 TRANSACTION_CONFLICT on other transaction cancellations', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockDocClient = {
+      send: async () => {
+        const error = new Error('Transaction cancelled');
+        error.name = 'TransactionCanceledException';
+        (error as any).CancellationReasons = [
+          { Code: 'TransactionConflict' },
+          { Code: 'None' },
+        ];
+        throw error;
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new UserRepository(mockDocClient);
+    await assert.rejects(
+      async () => {
+        await repo.createWithEmailLock({
+          userId: 'usr-12345',
+          name: 'Conflict User',
+          email: 'conflict@vesit.edu',
+          normalizedEmail: 'conflict@vesit.edu',
+          passwordHash: 'hashed_password_sample',
+          role: 'ATTENDEE',
+        });
+      },
+      (err: any) => {
+        assert.equal(err instanceof ConflictError, true);
+        assert.equal(err.code, 'TRANSACTION_CONFLICT');
+        assert.equal(err.statusCode, 409);
         return true;
       }
     );

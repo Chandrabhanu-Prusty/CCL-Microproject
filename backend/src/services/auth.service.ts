@@ -71,12 +71,12 @@ export class AuthService {
 
     if (!user) {
       // Use generic error message to avoid revealing account existence
-      throw new UnauthorizedError('Invalid email or password.');
+      throw new UnauthorizedError('Invalid email or password.', 'INVALID_CREDENTIALS');
     }
 
     const isPasswordValid = await bcrypt.compare(input.password, user.passwordHash);
     if (!isPasswordValid) {
-      throw new UnauthorizedError('Invalid email or password.');
+      throw new UnauthorizedError('Invalid email or password.', 'INVALID_CREDENTIALS');
     }
 
     const token = this.generateToken({

@@ -20,8 +20,11 @@ export class ValidationError extends AppError {
 }
 
 export class UnauthorizedError extends AppError {
-  constructor(message = 'Authentication required. Please provide a valid Bearer token.') {
-    super(401, 'UNAUTHORIZED', message);
+  constructor(
+    message = 'Authentication required. Please provide a valid Bearer token.',
+    code = 'UNAUTHORIZED'
+  ) {
+    super(401, code, message);
   }
 }
 

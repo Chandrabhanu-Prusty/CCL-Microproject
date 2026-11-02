@@ -129,6 +129,7 @@ describe('AuthService Unit Tests', () => {
       (err: any) => {
         assert.equal(err instanceof UnauthorizedError, true);
         assert.equal(err.statusCode, 401);
+        assert.equal(err.code, 'INVALID_CREDENTIALS');
         assert.equal(err.message, 'Invalid email or password.');
         return true;
       }
@@ -167,6 +168,7 @@ describe('AuthService Unit Tests', () => {
       (err: any) => {
         assert.equal(err instanceof UnauthorizedError, true);
         assert.equal(err.statusCode, 401);
+        assert.equal(err.code, 'INVALID_CREDENTIALS');
         assert.equal(err.message, 'Invalid email or password.');
         return true;
       }
