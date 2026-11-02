@@ -20,7 +20,8 @@ export class RsvpService {
   /**
    * Registers an RSVP or enters FIFO waitlist for an event.
    * Atomically protects capacity invariants, prevents duplicate registrations,
-   * and retries confirmed seats if one becomes available before waitlist commit.
+   * enforces event time eligibility inside transactions, and retries confirmed seats
+   * if one becomes available before waitlist commit.
    */
   async rsvpEvent(eventId: string, caller: TokenPayload): Promise<RsvpResult> {
     const event = await this.eventRepo.findById(eventId);
@@ -36,17 +37,19 @@ export class RsvpService {
       throw new AppError(400, 'REGISTRATION_CLOSED', 'Registration for this event is closed.');
     }
 
-    // Check duplicate active registration for caller
+    // Check duplicate active registration for caller (CANCELLED RSVPs are ignored, allowing re-registration)
     const existingRsvp = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
     if (existingRsvp && (existingRsvp.status === 'CONFIRMED' || existingRsvp.status === 'WAITLISTED')) {
       throw new ConflictError('DUPLICATE_REGISTRATION', 'You have already registered for this event.');
     }
 
-    // Lookup user display name for waitlist record
-    let userName: string | undefined = undefined;
+    // Lookup user display name for waitlist record & ticket
+    let userName: string = caller.email.split('@')[0] || 'Attendee';
     try {
       const userProfile = await this.userRepo.findById(caller.userId);
-      userName = userProfile?.name;
+      if (userProfile?.name && userProfile.name.trim().length > 0) {
+        userName = userProfile.name.trim();
+      }
     } catch {
       // Fallback if user profile lookup fails
     }
@@ -59,6 +62,10 @@ export class RsvpService {
         throw new AppError(400, 'REGISTRATION_CLOSED', 'Registration for this event is closed.');
       }
 
+      if (currentEvent.startAt && new Date(currentEvent.startAt).getTime() < Date.now()) {
+        throw new AppError(400, 'REGISTRATION_CLOSED', 'Registration for this event is closed.');
+      }
+
       if (currentEvent.confirmedCount < currentEvent.capacity) {
         // Path A: Seat available -> attempt atomic confirmed seat reservation
         const rsvpId = `rsvp-${randomUUID()}`;
@@ -68,7 +75,14 @@ export class RsvpService {
           eventId,
           caller.userId,
           rsvpId,
-          ticketId
+          {
+            ticketId,
+            attendeeName: userName,
+            attendeeEmail: caller.email,
+            eventTitle: currentEvent.title,
+            eventVenue: currentEvent.venue,
+            eventStartAt: currentEvent.startAt,
+          }
         );
 
         if (res.success) {
@@ -82,6 +96,10 @@ export class RsvpService {
 
         if (res.reason === 'DUPLICATE_REGISTRATION') {
           throw new ConflictError('DUPLICATE_REGISTRATION', 'You have already registered for this event.');
+        }
+
+        if (res.reason === 'REGISTRATION_CLOSED' || res.reason === 'EVENT_NOT_PUBLISHED') {
+          throw new AppError(400, 'REGISTRATION_CLOSED', 'Registration for this event is closed.');
         }
 
         if (res.reason === 'EVENT_FULL') {
@@ -118,6 +136,10 @@ export class RsvpService {
           throw new ConflictError('DUPLICATE_REGISTRATION', 'You have already registered for this event.');
         }
 
+        if (res.reason === 'REGISTRATION_CLOSED' || res.reason === 'EVENT_NOT_PUBLISHED') {
+          throw new AppError(400, 'REGISTRATION_CLOSED', 'Registration for this event is closed.');
+        }
+
         if (res.reason === 'SEAT_AVAILABLE') {
           // A seat became available concurrently! Retry confirmed reservation path
           continue;
@@ -134,55 +156,64 @@ export class RsvpService {
 
   /**
    * Cancels caller's active registration.
-   * If CONFIRMED and waitlist exists -> atomically promotes oldest waitlisted candidate.
-   * If CONFIRMED and waitlist empty -> atomically decrements confirmedCount (verifying waitlistCount == 0).
-   * If WAITLISTED -> atomically deletes waitlist queue entry and RSVP state.
+   * If CONFIRMED and waitlist exists -> atomically promotes oldest waitlisted candidate and cancels ticket.
+   * If CONFIRMED and waitlist empty -> atomically decrements confirmedCount and cancels ticket.
+   * If WAITLISTED -> atomically cancels waitlist queue entry and sets RSVP status to CANCELLED.
+   * Seamlessly resolves concurrent race where a waitlisted attendee is promoted during cancellation.
    */
   async cancelRsvp(eventId: string, caller: TokenPayload): Promise<CancelRsvpResult> {
-    let existingRsvp = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
-    if (!existingRsvp || (existingRsvp.status !== 'CONFIRMED' && existingRsvp.status !== 'WAITLISTED')) {
-      throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
-    }
+    const maxRetries = 5;
 
-    // Branch A: Waitlisted attendee cancellation
-    if (existingRsvp.status === 'WAITLISTED') {
-      const queueKey = existingRsvp.queueKey || `${existingRsvp.createdAt}#${caller.userId}`;
-      const res = await this.rsvpRepo.cancelWaitlistedRsvp(eventId, caller.userId, queueKey);
-
-      if (res.success) {
-        return {
-          message: 'Registration successfully cancelled.',
-          promotedAttendee: null,
-        };
-      }
-
-      if (res.reason === 'RSVP_NOT_FOUND') {
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const existingRsvp = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
+      if (!existingRsvp || (existingRsvp.status !== 'CONFIRMED' && existingRsvp.status !== 'WAITLISTED')) {
         throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
       }
 
-      // If concurrent promotion occurred while cancelling, reread state to handle safely
-      const refreshed = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
-      if (!refreshed) {
-        return {
-          message: 'Registration successfully cancelled.',
-          promotedAttendee: null,
-        };
-      }
-      if (refreshed.status === 'CONFIRMED') {
-        existingRsvp = refreshed;
-        // Proceed into Branch B (confirmed cancellation)
-      } else {
-        throw new AppError(
-          409,
-          'CONCURRENT_UPDATE_CONFLICT',
-          'Could not cancel waitlist registration due to contention.'
-        );
-      }
-    }
+      // Branch A: Waitlisted attendee cancellation
+      if (existingRsvp.status === 'WAITLISTED') {
+        const queueKey = existingRsvp.queueKey || `${existingRsvp.createdAt}#${caller.userId}`;
+        const res = await this.rsvpRepo.cancelWaitlistedRsvp(eventId, caller.userId, queueKey);
 
-    // Branch B: Confirmed attendee cancellation with bounded retries
-    const maxRetries = 5;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        if (res.success) {
+          return {
+            message: 'Registration successfully cancelled.',
+            promotedAttendee: null,
+          };
+        }
+
+        // If cancellation failed, strongly re-read state to detect race with concurrent promotion
+        const refreshed = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
+        if (refreshed?.status === 'CONFIRMED') {
+          // Attendee was promoted to CONFIRMED concurrently!
+          // Loop will seamlessly execute confirmed cancellation branch
+          continue;
+        }
+
+        if (!refreshed || refreshed.status === 'CANCELLED') {
+          throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
+        }
+
+        // Transient conflict; retry
+        continue;
+      }
+
+      // Branch B: Confirmed attendee cancellation
+      let eventTitle = 'Campus Event';
+      let eventVenue = 'Campus Venue';
+      let eventStartAt = new Date().toISOString();
+
+      try {
+        const event = await this.eventRepo.findById(eventId);
+        if (event) {
+          eventTitle = event.title;
+          eventVenue = event.venue;
+          eventStartAt = event.startAt;
+        }
+      } catch {
+        // Fallback
+      }
+
       const oldestCandidate = await this.rsvpRepo.getOldestWaitlistEntry(eventId);
 
       if (oldestCandidate) {
@@ -191,26 +222,44 @@ export class RsvpService {
         const promoRes = await this.rsvpRepo.promoteWaitlistEntry(
           eventId,
           caller.userId,
+          existingRsvp.ticketId,
           oldestCandidate,
-          newTicketId
+          newTicketId,
+          {
+            eventTitle,
+            eventVenue,
+            eventStartAt,
+          }
         );
 
         if (promoRes.success) {
+          const displayName =
+            oldestCandidate.attendeeName && oldestCandidate.attendeeName.trim().length > 0
+              ? oldestCandidate.attendeeName.trim()
+              : 'Waitlisted Attendee';
+
           return {
             message: 'Registration successfully cancelled.',
-            promotedAttendee: oldestCandidate.attendeeName || oldestCandidate.attendeeEmail,
+            promotedAttendee: displayName,
           };
         }
 
         if (promoRes.reason === 'RSVP_NOT_FOUND') {
-          throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
+          const checkRsvp = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
+          if (!checkRsvp || checkRsvp.status !== 'CONFIRMED') {
+            throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
+          }
         }
 
-        // Concurrent promotion contention; retry to query next eligible candidate
+        // Concurrent promotion conflict; retry loop to query next candidate
         continue;
       } else {
         // Waitlist is empty -> decrement confirmedCount with waitlistCount == 0 condition
-        const cancelRes = await this.rsvpRepo.cancelConfirmedWithoutWaitlist(eventId, caller.userId);
+        const cancelRes = await this.rsvpRepo.cancelConfirmedWithoutWaitlist(
+          eventId,
+          caller.userId,
+          existingRsvp.ticketId
+        );
 
         if (cancelRes.success) {
           return {
@@ -220,7 +269,10 @@ export class RsvpService {
         }
 
         if (cancelRes.reason === 'RSVP_NOT_FOUND') {
-          throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
+          const checkRsvp = await this.rsvpRepo.findByEventAndAttendee(eventId, caller.userId);
+          if (!checkRsvp || checkRsvp.status !== 'CONFIRMED') {
+            throw new NotFoundError('RSVP_NOT_FOUND', 'Active registration not found for this event.');
+          }
         }
 
         if (cancelRes.reason === 'WAITLIST_NOT_EMPTY') {
@@ -238,17 +290,18 @@ export class RsvpService {
   }
 
   /**
-   * Retrieves all registrations for caller using attendee-index GSI.
-   * Enriches each registration with current event details.
+   * Retrieves all active registrations for caller using attendee-index GSI.
+   * Excludes cancelled registrations and enriches active items with current event details.
    */
   async getMyRsvps(caller: TokenPayload): Promise<UserRsvpSummary[]> {
     const rsvps = await this.rsvpRepo.findRsvpsByAttendee(caller.userId);
+    const activeRsvps = rsvps.filter((r) => r.status !== 'CANCELLED');
 
     // Fetch and enrich event summaries
     const eventCache = new Map<string, { title: string; venue: string; startAt: string }>();
 
     const enriched = await Promise.all(
-      rsvps.map(async (rsvp) => {
+      activeRsvps.map(async (rsvp) => {
         let eventSummary = eventCache.get(rsvp.eventId);
         if (!eventSummary) {
           try {
