@@ -15,6 +15,10 @@ export const registerSchema = z.object({
     .string({ required_error: 'Password is required' })
     .min(8, 'Password must be at least 8 characters')
     .refine(
+      (val) => /[0-9\W_]/.test(val),
+      'Password must contain at least one number or special character'
+    )
+    .refine(
       (val) => Buffer.byteLength(val, 'utf8') <= 72,
       'Password must not exceed 72 bytes (bcrypt input limit)'
     ),

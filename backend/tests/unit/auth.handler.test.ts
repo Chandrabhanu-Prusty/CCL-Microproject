@@ -91,6 +91,25 @@ describe('Auth Handlers Unit Tests', () => {
       assert.match(body.error.message, /Password must be at least 8 characters/);
     });
 
+    test('returns 400 VALIDATION_ERROR when password lacks number or special character', async () => {
+      resetEnvCache();
+      getEnv(testEnv);
+
+      const event = createMockEvent({
+        body: JSON.stringify({
+          name: 'Ananya Sen',
+          email: 'ananya@vesit.edu',
+          password: 'LettersOnlyPassword', // >= 8 chars but no numbers or special chars
+        }),
+      });
+
+      const res = (await registerHandler(event)) as any;
+      assert.equal(res.statusCode, 400);
+      const body = JSON.parse(res.body);
+      assert.equal(body.error.code, 'VALIDATION_ERROR');
+      assert.match(body.error.message, /Password must contain at least one number or special character/);
+    });
+
     test('returns 400 VALIDATION_ERROR when password exceeds 72 UTF-8 bytes (boundary: 73 ASCII bytes)', async () => {
       resetEnvCache();
       getEnv(testEnv);
@@ -99,7 +118,7 @@ describe('Auth Handlers Unit Tests', () => {
         body: JSON.stringify({
           name: 'Boundary Test',
           email: 'boundary73@vesit.edu',
-          password: 'A'.repeat(73), // 73 bytes ASCII
+          password: 'A'.repeat(71) + '1!', // 73 bytes ASCII with number and special char
         }),
       });
 
@@ -133,7 +152,7 @@ describe('Auth Handlers Unit Tests', () => {
       assert.match(body.error.message, /Password must not exceed 72 bytes/);
     });
 
-    test('accepts password of exactly 72 UTF-8 bytes at upper boundary', async () => {
+    test('accepts password of exactly 72 UTF-8 bytes at upper boundary with complexity', async () => {
       resetEnvCache();
       getEnv(testEnv);
 
@@ -144,11 +163,61 @@ describe('Auth Handlers Unit Tests', () => {
         }),
       } as unknown as AuthService;
 
+      // 70 'A's + '1' + '!' = 72 bytes
+      const exact72 = 'A'.repeat(70) + '1!';
+      assert.equal(Buffer.byteLength(exact72, 'utf8'), 72);
+
       const event = createMockEvent({
         body: JSON.stringify({
           name: 'Boundary 72',
           email: 'boundary72@vesit.edu',
-          password: 'A'.repeat(72), // exactly 72 bytes
+          password: exact72,
+        }),
+      });
+
+      const res = (await registerHandler(event, mockService)) as any;
+      assert.equal(res.statusCode, 201);
+    });
+
+    test('accepts password with at least one number (no special character)', async () => {
+      resetEnvCache();
+      getEnv(testEnv);
+
+      const mockService = {
+        register: async () => ({
+          token: 'mock.jwt.token',
+          user: { userId: 'usr-num', name: 'Num Only', email: 'num@vesit.edu', role: 'ATTENDEE' },
+        }),
+      } as unknown as AuthService;
+
+      const event = createMockEvent({
+        body: JSON.stringify({
+          name: 'Num Only',
+          email: 'num@vesit.edu',
+          password: 'Password123',
+        }),
+      });
+
+      const res = (await registerHandler(event, mockService)) as any;
+      assert.equal(res.statusCode, 201);
+    });
+
+    test('accepts password with at least one special character (no numbers)', async () => {
+      resetEnvCache();
+      getEnv(testEnv);
+
+      const mockService = {
+        register: async () => ({
+          token: 'mock.jwt.token',
+          user: { userId: 'usr-spec', name: 'Spec Only', email: 'spec@vesit.edu', role: 'ATTENDEE' },
+        }),
+      } as unknown as AuthService;
+
+      const event = createMockEvent({
+        body: JSON.stringify({
+          name: 'Spec Only',
+          email: 'spec@vesit.edu',
+          password: 'Password!',
         }),
       });
 
@@ -167,7 +236,7 @@ describe('Auth Handlers Unit Tests', () => {
         }),
       } as unknown as AuthService;
 
-      // '🔒' is 4 bytes in UTF-8. 18 of them = 72 bytes
+      // '🔒' is 4 bytes in UTF-8. 18 of them = 72 bytes (counts as special characters in UTF-8 non-alphanumeric)
       const validMultibyte = '🔒'.repeat(18);
       assert.equal(Buffer.byteLength(validMultibyte, 'utf8'), 72);
 
@@ -264,13 +333,41 @@ describe('Auth Handlers Unit Tests', () => {
       assert.equal(body.user.userId, 'usr-login-1');
     });
 
-    test('returns 401 UNAUTHORIZED on failed authentication', async () => {
+    test('allows login with simple password lacking registration complexity', async () => {
+      resetEnvCache();
+      getEnv(testEnv);
+
+      const mockService = {
+        login: async () => ({
+          token: 'valid.auth.token',
+          user: {
+            userId: 'usr-login-simple',
+            name: 'Simple User',
+            email: 'simple@vesit.edu',
+            role: 'ATTENDEE',
+          },
+        }),
+      } as unknown as AuthService;
+
+      // 'simple' has only letters and < 8 chars, yet loginSchema permits it
+      const event = createMockEvent({
+        body: JSON.stringify({
+          email: 'simple@vesit.edu',
+          password: 'simple',
+        }),
+      });
+
+      const res = (await loginHandler(event, mockService)) as any;
+      assert.equal(res.statusCode, 200);
+    });
+
+    test('returns 401 INVALID_CREDENTIALS on failed authentication', async () => {
       resetEnvCache();
       getEnv(testEnv);
 
       const mockService = {
         login: async () => {
-          throw new UnauthorizedError('Invalid email or password.');
+          throw new UnauthorizedError('Invalid email or password.', 'INVALID_CREDENTIALS');
         },
       } as unknown as AuthService;
 
@@ -284,7 +381,7 @@ describe('Auth Handlers Unit Tests', () => {
       const res = (await loginHandler(event, mockService)) as any;
       assert.equal(res.statusCode, 401);
       const body = JSON.parse(res.body);
-      assert.equal(body.error.code, 'UNAUTHORIZED');
+      assert.equal(body.error.code, 'INVALID_CREDENTIALS');
       assert.equal(body.error.message, 'Invalid email or password.');
     });
   });

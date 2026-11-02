@@ -33,6 +33,13 @@ describe('AppError Hierarchy & Mapping', () => {
     assert.equal(err.code, 'UNAUTHORIZED');
   });
 
+  test('UnauthorizedError accepts custom code e.g. INVALID_CREDENTIALS', () => {
+    const err = new UnauthorizedError('Invalid email or password.', 'INVALID_CREDENTIALS');
+    assert.equal(err.statusCode, 401);
+    assert.equal(err.code, 'INVALID_CREDENTIALS');
+    assert.equal(err.message, 'Invalid email or password.');
+  });
+
   test('ForbiddenError defaults to 403 and FORBIDDEN', () => {
     const err = new ForbiddenError();
     assert.equal(err.statusCode, 403);

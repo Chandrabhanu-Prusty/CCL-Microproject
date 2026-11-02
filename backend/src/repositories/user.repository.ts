@@ -91,10 +91,29 @@ export class UserRepository {
         'name' in err &&
         err.name === 'TransactionCanceledException'
       ) {
-        // Atomic transaction cancelled because EMAIL#<normalizedEmail> lock item already exists
+        const txError = err as { CancellationReasons?: Array<{ Code?: string; Message?: string }> };
+        const reasons = txError.CancellationReasons;
+
+        // Condition failure on index 1: email lock item already exists
+        if (reasons && reasons[1]?.Code === 'ConditionalCheckFailed') {
+          throw new ConflictError(
+            'EMAIL_ALREADY_EXISTS',
+            'An account with this email address already exists.'
+          );
+        }
+
+        // Condition failure on index 0: profile user ID already exists
+        if (reasons && reasons[0]?.Code === 'ConditionalCheckFailed') {
+          throw new ConflictError(
+            'USER_ALREADY_EXISTS',
+            'A user profile with this ID already exists.'
+          );
+        }
+
+        // Other transaction cancellation reasons (e.g. TransactionConflict)
         throw new ConflictError(
-          'EMAIL_ALREADY_EXISTS',
-          'An account with this email address already exists.'
+          'TRANSACTION_CONFLICT',
+          'User registration transaction failed due to a concurrent conflict or cancellation.'
         );
       }
       throw err;
