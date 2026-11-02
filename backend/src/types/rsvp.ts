@@ -1,6 +1,6 @@
 import type { EventItem } from './event.js';
 
-export type RsvpStatus = 'CONFIRMED' | 'WAITLISTED';
+export type RsvpStatus = 'CONFIRMED' | 'WAITLISTED' | 'CANCELLED';
 
 export interface RsvpItem {
   eventId: string;
@@ -21,6 +21,22 @@ export interface WaitlistItem {
   attendeeEmail: string;
   status: 'WAITING';
   createdAt: string;
+}
+
+export interface TicketItem {
+  ticketId: string;
+  eventId: string;
+  attendeeId: string;
+  attendeeName: string;
+  attendeeEmail: string;
+  eventTitle: string;
+  eventVenue: string;
+  eventStartAt: string;
+  status: 'ACTIVE' | 'CHECKED_IN' | 'CANCELLED';
+  issuedAt: string;
+  checkedInAt?: string | null;
+  checkedInBy?: string | null;
+  updatedAt?: string;
 }
 
 export interface ConfirmedRsvpResult {
