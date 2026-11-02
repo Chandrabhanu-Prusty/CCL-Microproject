@@ -11,6 +11,7 @@ export interface EventItem {
   venue: string;
   capacity: number;
   confirmedCount: number;
+  waitlistCount?: number;
   status: EventStatus;
   organizerId: string;
   bannerUrl?: string;

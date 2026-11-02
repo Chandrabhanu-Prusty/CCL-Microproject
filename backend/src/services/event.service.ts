@@ -4,25 +4,22 @@ import type { EventItem, CreateEventInput, UpdateEventInput, EventFilters } from
 import { NotFoundError, ForbiddenError, AppError } from '../utils/errors.js';
 
 export class EventService {
-  private eventRepo: EventRepository;
-
-  constructor(eventRepo?: EventRepository) {
-    this.eventRepo = eventRepo ?? new EventRepository();
-  }
+  constructor(private eventRepo: EventRepository = new EventRepository()) {}
 
   /**
-   * Lists published events with optional category and search query filtering.
-   * Leverages status-startAt-index GSI.
+   * Retrieves published events with optional filtering.
+   * Chronologically ordered by startAt via status-startAt-index GSI.
    */
   async listEvents(filters?: EventFilters): Promise<EventItem[]> {
-    let events = await this.eventRepo.findPublished(filters?.category);
+    const events = await this.eventRepo.findPublished(filters?.category);
 
     if (filters?.q) {
-      const term = filters.q.trim().toLowerCase();
-      events = events.filter(
+      const qLower = filters.q.toLowerCase().trim();
+      return events.filter(
         (e) =>
-          e.title.toLowerCase().includes(term) ||
-          e.venue.toLowerCase().includes(term)
+          e.title.toLowerCase().includes(qLower) ||
+          e.venue.toLowerCase().includes(qLower) ||
+          e.description.toLowerCase().includes(qLower)
       );
     }
 
@@ -30,7 +27,7 @@ export class EventService {
   }
 
   /**
-   * Retrieves single event by ID.
+   * Retrieves single event by ID with strongly consistent read.
    */
   async getEventById(eventId: string): Promise<EventItem> {
     const event = await this.eventRepo.findById(eventId);
@@ -41,7 +38,7 @@ export class EventService {
   }
 
   /**
-   * Creates a new campus event with initial status PUBLISHED and confirmedCount 0.
+   * Creates a new campus event with caller as organizerId.
    */
   async createEvent(organizerId: string, input: CreateEventInput): Promise<EventItem> {
     const now = new Date().toISOString();
@@ -57,6 +54,7 @@ export class EventService {
       venue: input.venue,
       capacity: input.capacity,
       confirmedCount: 0,
+      waitlistCount: 0,
       status: 'PUBLISHED',
       organizerId,
       bannerUrl: input.bannerUrl,

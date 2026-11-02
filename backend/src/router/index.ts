@@ -13,14 +13,21 @@ import {
   revokeStaffHandler,
   listAssignedEventsHandler,
 } from '../handlers/staff.handler.js';
+import {
+  rsvpEventHandler,
+  cancelRsvpHandler,
+  getMyRsvpsHandler,
+} from '../handlers/rsvp.handler.js';
 import type { AuthService } from '../services/auth.service.js';
 import type { EventService } from '../services/event.service.js';
 import type { StaffService } from '../services/staff.service.js';
+import type { RsvpService } from '../services/rsvp.service.js';
 
 export interface RouterServices {
   authService?: AuthService;
   eventService?: EventService;
   staffService?: StaffService;
+  rsvpService?: RsvpService;
 }
 
 /**
@@ -46,9 +53,13 @@ export async function routeRequest(
     return meHandler(event, services?.authService);
   }
 
-  // 2. User Assigned Events Route
+  // 2. User Routes (/api/me/...)
   if (method === 'GET' && path === '/api/me/assigned-events') {
     return listAssignedEventsHandler(event, services?.staffService, services?.authService);
+  }
+
+  if (method === 'GET' && path === '/api/me/rsvps') {
+    return getMyRsvpsHandler(event, services?.rsvpService, services?.authService);
   }
 
   // 3. Events Collection Routes
@@ -60,7 +71,19 @@ export async function routeRequest(
     return createEventHandler(event, services?.eventService, services?.authService);
   }
 
-  // 4. Event Staff Sub-resource Routes (/api/events/{eventId}/staff/...)
+  // 4. Event RSVP Sub-resource Routes (/api/events/{eventId}/rsvp)
+  const eventRsvpMatch = path.match(/^\/api\/events\/([^/]+)\/rsvp$/);
+  if (eventRsvpMatch) {
+    const eventId = decodeURIComponent(eventRsvpMatch[1]);
+    if (method === 'POST') {
+      return rsvpEventHandler(event, eventId, services?.rsvpService, services?.authService);
+    }
+    if (method === 'DELETE') {
+      return cancelRsvpHandler(event, eventId, services?.rsvpService, services?.authService);
+    }
+  }
+
+  // 5. Event Staff Sub-resource Routes (/api/events/{eventId}/staff/...)
   const staffMemberMatch = path.match(/^\/api\/events\/([^/]+)\/staff\/([^/]+)$/);
   if (staffMemberMatch) {
     const eventId = decodeURIComponent(staffMemberMatch[1]);
@@ -83,7 +106,7 @@ export async function routeRequest(
     }
   }
 
-  // 5. Individual Event Resource Routes (/api/events/{eventId})
+  // 6. Individual Event Resource Routes (/api/events/{eventId})
   const eventMatch = path.match(/^\/api\/events\/([^/]+)$/);
   if (eventMatch) {
     const eventId = decodeURIComponent(eventMatch[1]);
@@ -96,6 +119,6 @@ export async function routeRequest(
     }
   }
 
-  // 6. Unmatched Route -> 404 ROUTE_NOT_FOUND
+  // 7. Unmatched Route -> 404 ROUTE_NOT_FOUND
   throw new NotFoundError('ROUTE_NOT_FOUND', `Cannot ${method} ${path}`);
 }

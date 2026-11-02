@@ -471,6 +471,124 @@ describe('Router Unit Tests', () => {
     assert.equal(body.events.length, 1);
   });
 
+  test('routes POST /api/events/{eventId}/rsvp to rsvpEventHandler', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-att-1', email: 'att@vesit.edu', role: 'ATTENDEE' as const }),
+    } as any;
+
+    const mockRsvpService = {
+      rsvpEvent: async (eid: string, _caller: any) => ({
+        status: 'CONFIRMED',
+        rsvpId: 'rsvp-test-1',
+        ticketId: 'tkt-test-1',
+        message: 'Registration confirmed. Your digital pass is available.',
+      }),
+    } as any;
+
+    const event = createEvent('POST', '/api/events/evt-ccl-1/rsvp', {}, {
+      authorization: 'Bearer valid.att.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService, rsvpService: mockRsvpService }) as any;
+    assert.equal(res.statusCode, 201);
+    const body = JSON.parse(res.body);
+    assert.equal(body.status, 'CONFIRMED');
+    assert.equal(body.rsvpId, 'rsvp-test-1');
+  });
+
+  test('routes DELETE /api/events/{eventId}/rsvp to cancelRsvpHandler', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-att-1', email: 'att@vesit.edu', role: 'ATTENDEE' as const }),
+    } as any;
+
+    const mockRsvpService = {
+      cancelRsvp: async (eid: string, _caller: any) => ({
+        message: 'Registration successfully cancelled.',
+        promotedAttendee: 'Aarav Sharma',
+      }),
+    } as any;
+
+    const event = createEvent('DELETE', '/api/events/evt-ccl-1/rsvp', undefined, {
+      authorization: 'Bearer valid.att.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService, rsvpService: mockRsvpService }) as any;
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.promotedAttendee, 'Aarav Sharma');
+  });
+
+  test('routes GET /api/me/rsvps to getMyRsvpsHandler', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-att-1', email: 'att@vesit.edu', role: 'ATTENDEE' as const }),
+    } as any;
+
+    const mockRsvpService = {
+      getMyRsvps: async () => [
+        {
+          rsvpId: 'rsvp-1',
+          eventId: 'evt-ccl-1',
+          status: 'CONFIRMED',
+          ticketId: 'tkt-1',
+          createdAt: '2026-11-01T10:00:00.000Z',
+          event: { title: 'Hackathon', venue: 'VESIT', startAt: '2027-11-15T09:00:00.000Z' },
+        },
+      ],
+    } as any;
+
+    const event = createEvent('GET', '/api/me/rsvps', undefined, {
+      authorization: 'Bearer valid.att.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService, rsvpService: mockRsvpService }) as any;
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.equal(body.rsvps.length, 1);
+    assert.equal(body.rsvps[0].rsvpId, 'rsvp-1');
+  });
+
+  test('POST /api/events/{eventId}/rsvp returns 401 UNAUTHORIZED when Authorization header is missing', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const event = createEvent('POST', '/api/events/evt-ccl-1/rsvp', {});
+    const res = await routeRequest(event) as any;
+    assert.equal(res.statusCode, 401);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'UNAUTHORIZED');
+  });
+
+  test('DELETE /api/events/{eventId}/rsvp returns 401 UNAUTHORIZED when Authorization header is missing', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const event = createEvent('DELETE', '/api/events/evt-ccl-1/rsvp');
+    const res = await routeRequest(event) as any;
+    assert.equal(res.statusCode, 401);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'UNAUTHORIZED');
+  });
+
+  test('GET /api/me/rsvps returns 401 UNAUTHORIZED when Authorization header is missing', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const event = createEvent('GET', '/api/me/rsvps');
+    const res = await routeRequest(event) as any;
+    assert.equal(res.statusCode, 401);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'UNAUTHORIZED');
+  });
+
   test('returns 404 ROUTE_NOT_FOUND on unrecognized routes', async () => {
     resetEnvCache();
     getEnv(testEnv);
