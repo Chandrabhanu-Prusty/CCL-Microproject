@@ -32,18 +32,30 @@ export class StaffRepository {
 
   /**
    * Retrieves all staff assigned to a given event.
+   * Handles complete pagination across all pages using LastEvaluatedKey.
    */
   async findStaffByEvent(eventId: string): Promise<EventStaffRecord[]> {
-    const result = await this.getClient().send(
-      new QueryCommand({
-        TableName: this.tableName,
-        KeyConditionExpression: 'eventId = :eventId',
-        ExpressionAttributeValues: {
-          ':eventId': eventId,
-        },
-      })
-    );
-    return (result.Items as EventStaffRecord[]) ?? [];
+    const items: EventStaffRecord[] = [];
+    let lastEvaluatedKey: Record<string, unknown> | undefined = undefined;
+
+    do {
+      const result = await this.getClient().send(
+        new QueryCommand({
+          TableName: this.tableName,
+          KeyConditionExpression: 'eventId = :eventId',
+          ExpressionAttributeValues: {
+            ':eventId': eventId,
+          },
+          ExclusiveStartKey: lastEvaluatedKey,
+        })
+      );
+      if (result.Items) {
+        items.push(...(result.Items as EventStaffRecord[]));
+      }
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastEvaluatedKey);
+
+    return items;
   }
 
   /**
@@ -120,18 +132,30 @@ export class StaffRepository {
 
   /**
    * Queries events assigned to a specific user using user-assigned-events-index GSI.
+   * Handles complete pagination across all pages using LastEvaluatedKey.
    */
   async findAssignedEventsByUser(userId: string): Promise<EventStaffRecord[]> {
-    const result = await this.getClient().send(
-      new QueryCommand({
-        TableName: this.tableName,
-        IndexName: 'user-assigned-events-index',
-        KeyConditionExpression: 'userId = :userId',
-        ExpressionAttributeValues: {
-          ':userId': userId,
-        },
-      })
-    );
-    return (result.Items as EventStaffRecord[]) ?? [];
+    const items: EventStaffRecord[] = [];
+    let lastEvaluatedKey: Record<string, unknown> | undefined = undefined;
+
+    do {
+      const result = await this.getClient().send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: 'user-assigned-events-index',
+          KeyConditionExpression: 'userId = :userId',
+          ExpressionAttributeValues: {
+            ':userId': userId,
+          },
+          ExclusiveStartKey: lastEvaluatedKey,
+        })
+      );
+      if (result.Items) {
+        items.push(...(result.Items as EventStaffRecord[]));
+      }
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastEvaluatedKey);
+
+    return items;
   }
 }

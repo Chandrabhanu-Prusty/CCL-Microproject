@@ -13,6 +13,7 @@ describe('EventService Unit Tests', () => {
       description: 'Hackathon',
       category: 'Technology',
       startAt: '2026-11-15T09:00:00.000Z',
+      endAt: '2026-11-16T18:00:00.000Z',
       venue: 'Auditorium, VESIT',
       capacity: 100,
       confirmedCount: 88,
@@ -172,6 +173,83 @@ describe('EventService Unit Tests', () => {
       async () => {
         await service.updateEvent('evt-1', 'usr-org-1', {
           capacity: 50, // 50 < 88
+        });
+      },
+      (err: any) => {
+        assert.equal(err instanceof AppError, true);
+        assert.equal(err.statusCode, 400);
+        assert.equal(err.code, 'INVALID_CAPACITY');
+        assert.match(err.message, /less than existing confirmed attendees/);
+        return true;
+      }
+    );
+  });
+
+  test('updateEvent validates effective endAt relative to existing startAt when only endAt is updated', async () => {
+    const existing = { ...sampleEvents[0] }; // startAt: 2026-11-15T09:00:00.000Z
+    const mockRepo = {
+      findById: async () => existing,
+    } as unknown as EventRepository;
+
+    const service = new EventService(mockRepo);
+    await assert.rejects(
+      async () => {
+        await service.updateEvent('evt-1', 'usr-org-1', {
+          endAt: '2026-11-10T09:00:00.000Z', // before startAt
+        });
+      },
+      (err: any) => {
+        assert.equal(err instanceof AppError, true);
+        assert.equal(err.statusCode, 400);
+        assert.equal(err.code, 'VALIDATION_ERROR');
+        assert.match(err.message, /endAt must be after startAt/);
+        return true;
+      }
+    );
+  });
+
+  test('updateEvent validates effective startAt relative to existing endAt when only startAt is updated', async () => {
+    const existing = { ...sampleEvents[0] }; // endAt: 2026-11-16T18:00:00.000Z
+    const mockRepo = {
+      findById: async () => existing,
+    } as unknown as EventRepository;
+
+    const service = new EventService(mockRepo);
+    await assert.rejects(
+      async () => {
+        await service.updateEvent('evt-1', 'usr-org-1', {
+          startAt: '2026-11-20T09:00:00.000Z', // after endAt
+        });
+      },
+      (err: any) => {
+        assert.equal(err instanceof AppError, true);
+        assert.equal(err.statusCode, 400);
+        assert.equal(err.code, 'VALIDATION_ERROR');
+        assert.match(err.message, /endAt must be after startAt/);
+        return true;
+      }
+    );
+  });
+
+  test('updateEvent propagates 400 INVALID_CAPACITY when repository encounters concurrent capacity race', async () => {
+    const existing = { ...sampleEvents[0], confirmedCount: 50 };
+    const mockRepo = {
+      findById: async () => existing,
+      update: async () => {
+        throw new AppError(
+          400,
+          'INVALID_CAPACITY',
+          'Requested capacity is less than existing confirmed attendees.'
+        );
+      },
+    } as unknown as EventRepository;
+
+    const service = new EventService(mockRepo);
+    await assert.rejects(
+      async () => {
+        // Appears valid against initial read (capacity 55 >= 50), but concurrent RSVP raised confirmedCount to 60
+        await service.updateEvent('evt-1', 'usr-org-1', {
+          capacity: 55,
         });
       },
       (err: any) => {
