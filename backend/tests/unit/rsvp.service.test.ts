@@ -32,7 +32,7 @@ describe('RsvpService Unit Tests', () => {
     role: 'ATTENDEE' as const,
   };
 
-  test('rsvpEvent successfully reserves confirmed seat and passes ticket metadata', async () => {
+  test('rsvpEvent successfully reserves confirmed seat and passes ticket metadata without fake defaults', async () => {
     let reservedParams: any = null;
     const mockRsvpRepo = {
       findByEventAndAttendee: async () => null,
@@ -62,9 +62,48 @@ describe('RsvpService Unit Tests', () => {
     assert.equal(reservedParams.ticketData.attendeeEmail, 'attendee@vesit.edu');
     assert.equal(reservedParams.ticketData.eventTitle, 'Cloud Canvas 2026');
     assert.equal(reservedParams.ticketData.eventVenue, 'Auditorium, VESIT');
+    assert.equal(reservedParams.ticketData.eventStartAt, '2027-11-15T09:00:00.000Z');
   });
 
-  test('rsvpEvent successfully joins waitlist when event is full (confirmedCount >= capacity)', async () => {
+  test('rsvpEvent rejects non-existent event with 404 EVENT_NOT_FOUND', async () => {
+    const mockEventRepo = {
+      findById: async () => null,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService({} as any, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.rsvpEvent('evt-nonexistent', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof NotFoundError, true);
+        assert.equal(err.code, 'EVENT_NOT_FOUND');
+        assert.equal(err.statusCode, 404);
+        return true;
+      }
+    );
+  });
+
+  test('rsvpEvent rejects unpublished event with 400 EVENT_NOT_PUBLISHED', async () => {
+    const mockEventRepo = {
+      findById: async () => ({ ...sampleEvent, status: 'DRAFT' as const }),
+    } as unknown as EventRepository;
+
+    const service = new RsvpService({} as any, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.rsvpEvent('evt-ccl-1', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof AppError, true);
+        assert.equal(err.code, 'EVENT_NOT_PUBLISHED');
+        assert.equal(err.statusCode, 400);
+        return true;
+      }
+    );
+  });
+
+  test('rsvpEvent successfully joins waitlist and calculates exact FIFO position using getWaitlistPosition', async () => {
     const fullEvent: EventItem = {
       ...sampleEvent,
       capacity: 100,
@@ -73,13 +112,17 @@ describe('RsvpService Unit Tests', () => {
     };
 
     let waitlistParams: any = null;
+    let positionQueriedWith = '';
     const mockRsvpRepo = {
       findByEventAndAttendee: async () => null,
       joinWaitlist: async (eid: string, aid: string, rid: string, qk: string, name: string, email: string) => {
         waitlistParams = { eid, aid, rid, qk, name, email };
         return { success: true };
       },
-      getWaitlistCount: async () => 3,
+      getWaitlistPosition: async (_eid: string, qk: string) => {
+        positionQueriedWith = qk;
+        return 3;
+      },
     } as unknown as RsvpRepository;
 
     const mockEventRepo = {
@@ -97,6 +140,7 @@ describe('RsvpService Unit Tests', () => {
     assert.match(res.rsvpId, /^rsvp-/);
     assert.equal((res as any).queuePosition, 3);
     assert.match((res as any).queueKey, /#usr-att-1$/);
+    assert.equal(positionQueriedWith, (res as any).queueKey);
     assert.equal(waitlistParams.email, 'attendee@vesit.edu');
     assert.equal(waitlistParams.name, 'Attendee One');
   });
@@ -198,7 +242,6 @@ describe('RsvpService Unit Tests', () => {
     const mockRsvpRepo = {
       findByEventAndAttendee: async () => null,
       reserveConfirmedSeat: async () => {
-        // Condition check failed inside transaction because event started
         return { success: false, reason: 'REGISTRATION_CLOSED' as const };
       },
     } as unknown as RsvpRepository;
@@ -271,7 +314,7 @@ describe('RsvpService Unit Tests', () => {
     );
   });
 
-  test('cancelRsvp for confirmed attendee with empty waitlist updates status and ticket to CANCELLED', async () => {
+  test('cancelRsvp fails cleanly with 404 EVENT_NOT_FOUND when event does not exist (no ticket created or partial cancellation)', async () => {
     const existingRsvp: RsvpItem = {
       eventId: 'evt-ccl-1',
       attendeeId: 'usr-att-1',
@@ -282,27 +325,93 @@ describe('RsvpService Unit Tests', () => {
       updatedAt: '2026-11-01T10:00:00.000Z',
     };
 
-    let cancelParams: any = null;
+    let promoteCalled = false;
+    let cancelNoWlCalled = false;
     const mockRsvpRepo = {
       findByEventAndAttendee: async () => existingRsvp,
-      getOldestWaitlistEntry: async () => null,
-      cancelConfirmedWithoutWaitlist: async (eid: string, aid: string, tid?: string) => {
-        cancelParams = { eid, aid, tid };
+      promoteWaitlistEntry: async () => {
+        promoteCalled = true;
+        return { success: true };
+      },
+      cancelConfirmedWithoutWaitlist: async () => {
+        cancelNoWlCalled = true;
         return { success: true };
       },
     } as unknown as RsvpRepository;
 
-    const service = new RsvpService(mockRsvpRepo);
+    const mockEventRepo = {
+      findById: async () => null, // Event lookup fails!
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.cancelRsvp('evt-ccl-1', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof NotFoundError, true);
+        assert.equal(err.code, 'EVENT_NOT_FOUND');
+        assert.equal(err.statusCode, 404);
+        return true;
+      }
+    );
+
+    assert.equal(promoteCalled, false);
+    assert.equal(cancelNoWlCalled, false);
+  });
+
+  test('cancelRsvp after event has started does NOT promote waitlisted attendee and decrements confirmedCount', async () => {
+    const pastEvent: EventItem = {
+      ...sampleEvent,
+      startAt: '2020-01-01T09:00:00.000Z', // Event in the past!
+      waitlistCount: 5,
+    };
+
+    const existingRsvp: RsvpItem = {
+      eventId: 'evt-ccl-1',
+      attendeeId: 'usr-att-1',
+      rsvpId: 'rsvp-1',
+      status: 'CONFIRMED',
+      ticketId: 'tkt-1',
+      createdAt: '2026-11-01T10:00:00.000Z',
+      updatedAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    let promoteCalled = false;
+    let cancelNoWlCalled = false;
+    const mockRsvpRepo = {
+      findByEventAndAttendee: async () => existingRsvp,
+      promoteWaitlistEntry: async () => {
+        promoteCalled = true;
+        return { success: true };
+      },
+      cancelConfirmedWithoutWaitlist: async () => {
+        cancelNoWlCalled = true;
+        return { success: true };
+      },
+    } as unknown as RsvpRepository;
+
+    const mockEventRepo = {
+      findById: async () => pastEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
     const res = await service.cancelRsvp('evt-ccl-1', attendeeCaller);
 
-    assert.equal(cancelParams.eid, 'evt-ccl-1');
-    assert.equal(cancelParams.aid, 'usr-att-1');
-    assert.equal(cancelParams.tid, 'tkt-1');
+    // Waitlist must NOT be promoted after event start
+    assert.equal(promoteCalled, false);
+    assert.equal(cancelNoWlCalled, true);
     assert.equal(res.promotedAttendee, null);
     assert.match(res.message, /successfully cancelled/);
   });
 
-  test('cancelRsvp for confirmed attendee with waitlist promotes oldest candidate and passes ticket details', async () => {
+  test('cancelRsvp before event start promotes oldest waitlist candidate', async () => {
+    const futureEvent: EventItem = {
+      ...sampleEvent,
+      startAt: '2028-11-15T09:00:00.000Z',
+      waitlistCount: 1,
+    };
+
     const existingRsvp: RsvpItem = {
       eventId: 'evt-ccl-1',
       attendeeId: 'usr-att-1',
@@ -333,9 +442,135 @@ describe('RsvpService Unit Tests', () => {
         oldTid: string | undefined,
         cand: WaitlistItem,
         newTid: string,
-        evtDetails?: any
+        evtDetails: any
       ) => {
         promoParams = { eid, cid, oldTid, cand, newTid, evtDetails };
+        return { success: true };
+      },
+    } as unknown as RsvpRepository;
+
+    const mockEventRepo = {
+      findById: async () => futureEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
+    const res = await service.cancelRsvp('evt-ccl-1', attendeeCaller);
+
+    assert.equal(promoParams.cid, 'usr-att-1');
+    assert.equal(promoParams.oldTid, 'tkt-1');
+    assert.equal(promoParams.cand.attendeeId, 'usr-waitlist-first');
+    assert.equal(promoParams.evtDetails.eventTitle, 'Cloud Canvas 2026');
+    assert.equal(res.promotedAttendee, 'Aarav Sharma');
+  });
+
+  test('cancelRsvp rejects cancellation after check-in with 409 CANNOT_CANCEL_CHECKED_IN', async () => {
+    const existingRsvp: RsvpItem = {
+      eventId: 'evt-ccl-1',
+      attendeeId: 'usr-att-1',
+      rsvpId: 'rsvp-1',
+      status: 'CONFIRMED',
+      ticketId: 'tkt-1',
+      createdAt: '2026-11-01T10:00:00.000Z',
+      updatedAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    const mockRsvpRepo = {
+      findByEventAndAttendee: async () => existingRsvp,
+      getOldestWaitlistEntry: async () => null,
+      cancelConfirmedWithoutWaitlist: async () => {
+        return { success: false, reason: 'TICKET_ALREADY_CHECKED_IN' as const };
+      },
+    } as unknown as RsvpRepository;
+
+    const mockEventRepo = {
+      findById: async () => sampleEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.cancelRsvp('evt-ccl-1', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof ConflictError, true);
+        assert.equal(err.code, 'CANNOT_CANCEL_CHECKED_IN');
+        assert.equal(err.statusCode, 409);
+        return true;
+      }
+    );
+  });
+
+  test('cancelRsvp reports missing ticket record as 409 TICKET_RECORD_MISSING (not RSVP_NOT_FOUND)', async () => {
+    const existingRsvp: RsvpItem = {
+      eventId: 'evt-ccl-1',
+      attendeeId: 'usr-att-1',
+      rsvpId: 'rsvp-1',
+      status: 'CONFIRMED',
+      ticketId: 'tkt-1',
+      createdAt: '2026-11-01T10:00:00.000Z',
+      updatedAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    const mockRsvpRepo = {
+      findByEventAndAttendee: async () => existingRsvp,
+      getOldestWaitlistEntry: async () => null,
+      cancelConfirmedWithoutWaitlist: async () => {
+        return { success: false, reason: 'TICKET_NOT_FOUND' as const };
+      },
+    } as unknown as RsvpRepository;
+
+    const mockEventRepo = {
+      findById: async () => sampleEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.cancelRsvp('evt-ccl-1', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof ConflictError, true);
+        assert.equal(err.code, 'TICKET_RECORD_MISSING');
+        assert.notEqual(err.code, 'RSVP_NOT_FOUND');
+        assert.equal(err.statusCode, 409);
+        return true;
+      }
+    );
+  });
+
+  test('cancelRsvp retries promotion when concurrent waitlist insertion prevented no-waitlist branch', async () => {
+    const existingRsvp: RsvpItem = {
+      eventId: 'evt-ccl-1',
+      attendeeId: 'usr-att-1',
+      rsvpId: 'rsvp-1',
+      status: 'CONFIRMED',
+      ticketId: 'tkt-1',
+      createdAt: '2026-11-01T10:00:00.000Z',
+      updatedAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    let attempt = 0;
+    const promotedCandidate: WaitlistItem = {
+      eventId: 'evt-ccl-1',
+      queueKey: '2026-11-01T10:10:00.000Z#usr-new-waitlist',
+      attendeeId: 'usr-new-waitlist',
+      attendeeName: 'New Waitlisted User',
+      attendeeEmail: 'new@vesit.edu',
+      status: 'WAITING',
+      createdAt: '2026-11-01T10:10:00.000Z',
+    };
+
+    const mockRsvpRepo = {
+      findByEventAndAttendee: async () => existingRsvp,
+      getOldestWaitlistEntry: async () => {
+        attempt++;
+        if (attempt === 1) return null; // First check saw empty waitlist
+        return promotedCandidate; // Second check after WAITLIST_NOT_EMPTY sees the newly inserted candidate
+      },
+      cancelConfirmedWithoutWaitlist: async () => {
+        return { success: false, reason: 'WAITLIST_NOT_EMPTY' as const };
+      },
+      promoteWaitlistEntry: async () => {
         return { success: true };
       },
     } as unknown as RsvpRepository;
@@ -347,11 +582,7 @@ describe('RsvpService Unit Tests', () => {
     const service = new RsvpService(mockRsvpRepo, mockEventRepo);
     const res = await service.cancelRsvp('evt-ccl-1', attendeeCaller);
 
-    assert.equal(promoParams.cid, 'usr-att-1');
-    assert.equal(promoParams.oldTid, 'tkt-1');
-    assert.equal(promoParams.cand.attendeeId, 'usr-waitlist-first');
-    assert.equal(promoParams.evtDetails.eventTitle, 'Cloud Canvas 2026');
-    assert.equal(res.promotedAttendee, 'Aarav Sharma');
+    assert.equal(res.promotedAttendee, 'New Waitlisted User');
   });
 
   test('cancelRsvp privacy: does not leak promoted attendee email when name is missing', async () => {
@@ -369,7 +600,7 @@ describe('RsvpService Unit Tests', () => {
       eventId: 'evt-ccl-1',
       queueKey: '2026-11-01T10:05:00.000Z#usr-waitlist-first',
       attendeeId: 'usr-waitlist-first',
-      attendeeName: '', // empty name!
+      attendeeName: '', // empty name
       attendeeEmail: 'private_email@vesit.edu',
       status: 'WAITING',
       createdAt: '2026-11-01T10:05:00.000Z',
@@ -381,16 +612,18 @@ describe('RsvpService Unit Tests', () => {
       promoteWaitlistEntry: async () => ({ success: true }),
     } as unknown as RsvpRepository;
 
-    const service = new RsvpService(mockRsvpRepo);
+    const mockEventRepo = {
+      findById: async () => sampleEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
     const res = await service.cancelRsvp('evt-ccl-1', attendeeCaller);
 
-    // Must return generic 'Waitlisted Attendee', NOT private_email@vesit.edu!
     assert.equal(res.promotedAttendee, 'Waitlisted Attendee');
     assert.notEqual(res.promotedAttendee, 'private_email@vesit.edu');
   });
 
   test('cancelRsvp handles race condition when waitlisted attendee is promoted during cancellation', async () => {
-    // Initial read shows waitlisted RSVP
     const waitlistedRsvp: RsvpItem = {
       eventId: 'evt-ccl-1',
       attendeeId: 'usr-att-1',
@@ -401,7 +634,6 @@ describe('RsvpService Unit Tests', () => {
       updatedAt: '2026-11-01T11:00:00.000Z',
     };
 
-    // Strongly consistent read after race shows user was promoted to CONFIRMED!
     const promotedConfirmedRsvp: RsvpItem = {
       eventId: 'evt-ccl-1',
       attendeeId: 'usr-att-1',
@@ -422,17 +654,20 @@ describe('RsvpService Unit Tests', () => {
         return promotedConfirmedRsvp;
       },
       cancelWaitlistedRsvp: async () => {
-        // Fails because attendee is no longer WAITLISTED (was promoted concurrently)
         return { success: false, reason: 'CONCURRENT_WAITLIST_CONFLICT' as const };
       },
-      getOldestWaitlistEntry: async () => null, // empty waitlist
+      getOldestWaitlistEntry: async () => null,
       cancelConfirmedWithoutWaitlist: async () => {
         confirmedCancelCalled = true;
         return { success: true };
       },
     } as unknown as RsvpRepository;
 
-    const service = new RsvpService(mockRsvpRepo);
+    const mockEventRepo = {
+      findById: async () => sampleEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
     const res = await service.cancelRsvp('evt-ccl-1', attendeeCaller);
 
     assert.equal(confirmedCancelCalled, true);
