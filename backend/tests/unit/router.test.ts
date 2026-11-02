@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { routeRequest } from '../../src/router/index.js';
 import { handler } from '../../src/index.js';
 import { resetEnvCache, getEnv } from '../../src/config/env.js';
+import { AppError } from '../../src/utils/errors.js';
 import type { APIGatewayProxyEventV2 } from 'aws-lambda';
 
 describe('Router Unit Tests', () => {
@@ -169,6 +170,85 @@ describe('Router Unit Tests', () => {
     assert.equal(body.event.organizerId, 'usr-org-1');
   });
 
+  test('createEventHandler rejects past startAt with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-org-1', email: 'org@vesit.edu', role: 'ORGANIZER' as const }),
+    } as any;
+
+    const event = createEvent('POST', '/api/events', {
+      title: 'Past Event',
+      description: 'Test past date',
+      category: 'Technology',
+      startAt: '2020-01-01T10:00:00.000Z',
+      venue: 'Room 101',
+      capacity: 50,
+    }, {
+      authorization: 'Bearer valid.org.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService }) as any;
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'VALIDATION_ERROR');
+    assert.match(body.error.message, /startAt must be a future date/);
+  });
+
+  test('createEventHandler rejects invalid ISO 8601 string for startAt with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-org-1', email: 'org@vesit.edu', role: 'ORGANIZER' as const }),
+    } as any;
+
+    const event = createEvent('POST', '/api/events', {
+      title: 'Invalid Date Event',
+      description: 'Test invalid format',
+      category: 'Technology',
+      startAt: '2027/01/01 10:00:00', // Non-ISO format
+      venue: 'Room 101',
+      capacity: 50,
+    }, {
+      authorization: 'Bearer valid.org.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService }) as any;
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'VALIDATION_ERROR');
+    assert.match(body.error.message, /Must be a valid ISO 8601 date string/);
+  });
+
+  test('createEventHandler rejects endAt earlier than or equal to startAt with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-org-1', email: 'org@vesit.edu', role: 'ORGANIZER' as const }),
+    } as any;
+
+    const event = createEvent('POST', '/api/events', {
+      title: 'Inverted Dates Event',
+      description: 'Test endAt before startAt',
+      category: 'Technology',
+      startAt: '2027-10-15T12:00:00.000Z',
+      endAt: '2027-10-14T12:00:00.000Z',
+      venue: 'Room 101',
+      capacity: 50,
+    }, {
+      authorization: 'Bearer valid.org.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService }) as any;
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'VALIDATION_ERROR');
+    assert.match(body.error.message, /endAt must be after startAt/);
+  });
+
   test('routes GET /api/events/{eventId} and extracts eventId parameter', async () => {
     resetEnvCache();
     getEnv(testEnv);
@@ -212,6 +292,80 @@ describe('Router Unit Tests', () => {
     const res = await routeRequest(event, { authService: mockAuthService, eventService: mockEventService }) as any;
     assert.equal(res.statusCode, 200);
     assert.equal(updatedId, 'evt-target-123');
+  });
+
+  test('updateEventHandler rejects past startAt with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-org-1', email: 'org@vesit.edu', role: 'ORGANIZER' as const }),
+    } as any;
+
+    const event = createEvent('PATCH', '/api/events/evt-target-123', {
+      startAt: '2020-01-01T10:00:00.000Z',
+    }, {
+      authorization: 'Bearer valid.org.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService }) as any;
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'VALIDATION_ERROR');
+    assert.match(body.error.message, /startAt must be a future date/);
+  });
+
+  test('updateEventHandler rejects endAt earlier than startAt when both provided with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-org-1', email: 'org@vesit.edu', role: 'ORGANIZER' as const }),
+    } as any;
+
+    const event = createEvent('PATCH', '/api/events/evt-target-123', {
+      startAt: '2027-10-15T12:00:00.000Z',
+      endAt: '2027-10-14T12:00:00.000Z',
+    }, {
+      authorization: 'Bearer valid.org.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService }) as any;
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'VALIDATION_ERROR');
+    assert.match(body.error.message, /endAt must be after startAt/);
+  });
+
+  test('updateEventHandler returns HTTP 400 INVALID_CAPACITY when capacity race condition occurs', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockAuthService = {
+      verifyToken: () => ({ userId: 'usr-org-1', email: 'org@vesit.edu', role: 'ORGANIZER' as const }),
+    } as any;
+
+    const mockEventService = {
+      updateEvent: async () => {
+        throw new AppError(
+          400,
+          'INVALID_CAPACITY',
+          'Requested capacity is less than existing confirmed attendees.'
+        );
+      },
+    } as any;
+
+    const event = createEvent('PATCH', '/api/events/evt-target-123', {
+      capacity: 50,
+    }, {
+      authorization: 'Bearer valid.org.token',
+    });
+
+    const res = await routeRequest(event, { authService: mockAuthService, eventService: mockEventService }) as any;
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error.code, 'INVALID_CAPACITY');
+    assert.match(body.error.message, /Requested capacity is less than existing confirmed attendees/);
   });
 
   test('routes GET /api/events/{eventId}/staff and extracts eventId', async () => {

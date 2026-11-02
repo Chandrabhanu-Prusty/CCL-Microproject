@@ -50,6 +50,43 @@ describe('StaffRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.equal(executedCommand.input.ExpressionAttributeValues[':eventId'], 'evt-ccl-1');
   });
 
+  test('findStaffByEvent paginates across multiple DynamoDB pages using LastEvaluatedKey', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const staff1 = { ...sampleStaff, userId: 'usr-coord-1' };
+    const staff2 = { ...sampleStaff, userId: 'usr-coord-2' };
+    const executedCommands: any[] = [];
+
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        executedCommands.push(cmd);
+        if (executedCommands.length === 1) {
+          return {
+            Items: [staff1],
+            LastEvaluatedKey: { eventId: 'evt-ccl-1', userId: 'usr-coord-1' },
+          };
+        }
+        return {
+          Items: [staff2],
+        };
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new StaffRepository(mockDocClient);
+    const results = await repo.findStaffByEvent('evt-ccl-1');
+
+    assert.equal(results.length, 2);
+    assert.equal(results[0].userId, 'usr-coord-1');
+    assert.equal(results[1].userId, 'usr-coord-2');
+    assert.equal(executedCommands.length, 2);
+    assert.equal(executedCommands[0].input.ExclusiveStartKey, undefined);
+    assert.deepEqual(executedCommands[1].input.ExclusiveStartKey, {
+      eventId: 'evt-ccl-1',
+      userId: 'usr-coord-1',
+    });
+  });
+
   test('findStaffMember retrieves single assignment via consistent read', async () => {
     resetEnvCache();
     getEnv(testEnv);
@@ -188,5 +225,42 @@ describe('StaffRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.equal(executedCommand.input.IndexName, 'user-assigned-events-index');
     assert.equal(executedCommand.input.KeyConditionExpression, 'userId = :userId');
     assert.equal(executedCommand.input.ExpressionAttributeValues[':userId'], 'usr-coord-1');
+  });
+
+  test('findAssignedEventsByUser paginates across multiple DynamoDB pages using LastEvaluatedKey', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const staff1 = { ...sampleStaff, eventId: 'evt-ccl-1' };
+    const staff2 = { ...sampleStaff, eventId: 'evt-ccl-2' };
+    const executedCommands: any[] = [];
+
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        executedCommands.push(cmd);
+        if (executedCommands.length === 1) {
+          return {
+            Items: [staff1],
+            LastEvaluatedKey: { eventId: 'evt-ccl-1', userId: 'usr-coord-1' },
+          };
+        }
+        return {
+          Items: [staff2],
+        };
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new StaffRepository(mockDocClient);
+    const results = await repo.findAssignedEventsByUser('usr-coord-1');
+
+    assert.equal(results.length, 2);
+    assert.equal(results[0].eventId, 'evt-ccl-1');
+    assert.equal(results[1].eventId, 'evt-ccl-2');
+    assert.equal(executedCommands.length, 2);
+    assert.equal(executedCommands[0].input.ExclusiveStartKey, undefined);
+    assert.deepEqual(executedCommands[1].input.ExclusiveStartKey, {
+      eventId: 'evt-ccl-1',
+      userId: 'usr-coord-1',
+    });
   });
 });

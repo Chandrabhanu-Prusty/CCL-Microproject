@@ -9,7 +9,7 @@ import {
 import { getDynamoDB } from '../config/aws.js';
 import { getEnv } from '../config/env.js';
 import type { EventItem } from '../types/event.js';
-import { ConflictError, NotFoundError } from '../utils/errors.js';
+import { ConflictError, NotFoundError, ForbiddenError, AppError } from '../utils/errors.js';
 
 export class EventRepository {
   private docClient: DynamoDBDocumentClient | null = null;
@@ -73,10 +73,14 @@ export class EventRepository {
 
   /**
    * Queries published events using the status-startAt-index GSI.
+   * Handles complete pagination across all pages using LastEvaluatedKey.
    * Never uses DynamoDB Scan.
    */
   async findPublished(category?: string): Promise<EventItem[]> {
-    const queryInput: QueryCommandInput = {
+    const items: EventItem[] = [];
+    let lastEvaluatedKey: Record<string, unknown> | undefined = undefined;
+
+    const baseQueryInput: QueryCommandInput = {
       TableName: this.tableName,
       IndexName: 'status-startAt-index',
       KeyConditionExpression: '#status = :status',
@@ -90,31 +94,55 @@ export class EventRepository {
     };
 
     if (category) {
-      queryInput.FilterExpression = '#category = :category';
-      queryInput.ExpressionAttributeNames!['#category'] = 'category';
-      queryInput.ExpressionAttributeValues![':category'] = category;
+      baseQueryInput.FilterExpression = '#category = :category';
+      baseQueryInput.ExpressionAttributeNames!['#category'] = 'category';
+      baseQueryInput.ExpressionAttributeValues![':category'] = category;
     }
 
-    const result = await this.getClient().send(new QueryCommand(queryInput));
-    return (result.Items as EventItem[]) ?? [];
+    do {
+      const queryInput: QueryCommandInput = {
+        ...baseQueryInput,
+        ExclusiveStartKey: lastEvaluatedKey,
+      };
+
+      const result = await this.getClient().send(new QueryCommand(queryInput));
+      if (result.Items) {
+        items.push(...(result.Items as EventItem[]));
+      }
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastEvaluatedKey);
+
+    return items;
   }
 
   /**
    * Queries events owned by a specific organizer using organizer-index GSI.
+   * Handles complete pagination across all pages using LastEvaluatedKey.
    */
   async findByOrganizer(organizerId: string): Promise<EventItem[]> {
-    const result = await this.getClient().send(
-      new QueryCommand({
-        TableName: this.tableName,
-        IndexName: 'organizer-index',
-        KeyConditionExpression: 'organizerId = :organizerId',
-        ExpressionAttributeValues: {
-          ':organizerId': organizerId,
-        },
-        ScanIndexForward: false, // Newest first
-      })
-    );
-    return (result.Items as EventItem[]) ?? [];
+    const items: EventItem[] = [];
+    let lastEvaluatedKey: Record<string, unknown> | undefined = undefined;
+
+    do {
+      const result = await this.getClient().send(
+        new QueryCommand({
+          TableName: this.tableName,
+          IndexName: 'organizer-index',
+          KeyConditionExpression: 'organizerId = :organizerId',
+          ExpressionAttributeValues: {
+            ':organizerId': organizerId,
+          },
+          ScanIndexForward: false, // Newest first
+          ExclusiveStartKey: lastEvaluatedKey,
+        })
+      );
+      if (result.Items) {
+        items.push(...(result.Items as EventItem[]));
+      }
+      lastEvaluatedKey = result.LastEvaluatedKey as Record<string, unknown> | undefined;
+    } while (lastEvaluatedKey);
+
+    return items;
   }
 
   /**
@@ -190,10 +218,11 @@ export class EventRepository {
           throw new NotFoundError('EVENT_NOT_FOUND', 'Event not found.');
         }
         if (existing.organizerId !== organizerId) {
-          throw new ConflictError('FORBIDDEN', 'Access forbidden. You do not own this event.');
+          throw new ForbiddenError('Access forbidden. You do not own this event.');
         }
-        if (updates.capacity !== undefined && existing.confirmedCount > updates.capacity) {
-          throw new ConflictError(
+        if (updates.capacity !== undefined) {
+          throw new AppError(
+            400,
             'INVALID_CAPACITY',
             'Requested capacity is less than existing confirmed attendees.'
           );

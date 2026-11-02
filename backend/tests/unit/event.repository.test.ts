@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventRepository } from '../../src/repositories/event.repository.js';
 import { resetEnvCache, getEnv } from '../../src/config/env.js';
-import { ConflictError, NotFoundError } from '../../src/utils/errors.js';
+import { ConflictError, NotFoundError, AppError } from '../../src/utils/errors.js';
 import type { EventItem } from '../../src/types/event.js';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 
@@ -146,6 +146,44 @@ describe('EventRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.equal(executedCommand.input.ExpressionAttributeValues[':category'], 'Technology');
   });
 
+  test('findPublished paginates across multiple DynamoDB pages using LastEvaluatedKey', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const eventPage1 = { ...sampleEvent, eventId: 'evt-page-1' };
+    const eventPage2 = { ...sampleEvent, eventId: 'evt-page-2' };
+    const executedCommands: any[] = [];
+
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        executedCommands.push(cmd);
+        if (executedCommands.length === 1) {
+          return {
+            Items: [eventPage1],
+            LastEvaluatedKey: { eventId: 'evt-page-1', status: 'PUBLISHED', startAt: eventPage1.startAt },
+          };
+        }
+        return {
+          Items: [eventPage2],
+        };
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new EventRepository(mockDocClient);
+    const results = await repo.findPublished();
+
+    assert.equal(results.length, 2);
+    assert.equal(results[0].eventId, 'evt-page-1');
+    assert.equal(results[1].eventId, 'evt-page-2');
+    assert.equal(executedCommands.length, 2);
+    assert.equal(executedCommands[0].input.ExclusiveStartKey, undefined);
+    assert.deepEqual(executedCommands[1].input.ExclusiveStartKey, {
+      eventId: 'evt-page-1',
+      status: 'PUBLISHED',
+      startAt: eventPage1.startAt,
+    });
+  });
+
   test('findByOrganizer queries organizer-index GSI', async () => {
     resetEnvCache();
     getEnv(testEnv);
@@ -165,6 +203,43 @@ describe('EventRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.equal(executedCommand.input.IndexName, 'organizer-index');
     assert.equal(executedCommand.input.KeyConditionExpression, 'organizerId = :organizerId');
     assert.equal(executedCommand.input.ExpressionAttributeValues[':organizerId'], 'usr-org-1');
+  });
+
+  test('findByOrganizer paginates across multiple DynamoDB pages using LastEvaluatedKey', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const eventPage1 = { ...sampleEvent, eventId: 'evt-org-p1' };
+    const eventPage2 = { ...sampleEvent, eventId: 'evt-org-p2' };
+    const executedCommands: any[] = [];
+
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        executedCommands.push(cmd);
+        if (executedCommands.length === 1) {
+          return {
+            Items: [eventPage1],
+            LastEvaluatedKey: { eventId: 'evt-org-p1', organizerId: 'usr-org-1' },
+          };
+        }
+        return {
+          Items: [eventPage2],
+        };
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new EventRepository(mockDocClient);
+    const results = await repo.findByOrganizer('usr-org-1');
+
+    assert.equal(results.length, 2);
+    assert.equal(results[0].eventId, 'evt-org-p1');
+    assert.equal(results[1].eventId, 'evt-org-p2');
+    assert.equal(executedCommands.length, 2);
+    assert.equal(executedCommands[0].input.ExclusiveStartKey, undefined);
+    assert.deepEqual(executedCommands[1].input.ExclusiveStartKey, {
+      eventId: 'evt-org-p1',
+      organizerId: 'usr-org-1',
+    });
   });
 
   test('update executes conditional update protecting ownership and capacity invariants', async () => {
@@ -188,5 +263,43 @@ describe('EventRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.match(executedCommand.input.ConditionExpression, /attribute_exists\(eventId\)/);
     assert.match(executedCommand.input.ConditionExpression, /organizerId = :organizerId/);
     assert.match(executedCommand.input.ConditionExpression, /confirmedCount <= :newCapacity/);
+  });
+
+  test('update throws HTTP 400 INVALID_CAPACITY when conditional check fails due to capacity race', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    // Mock client: first call to send is UpdateCommand -> throws ConditionalCheckFailedException
+    // second call to send is GetCommand (findById) -> returns existing item with confirmedCount: 60
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        if (cmd.input && cmd.input.UpdateExpression) {
+          const error = new Error('Conditional check failed');
+          error.name = 'ConditionalCheckFailedException';
+          throw error;
+        }
+        // GetCommand from findById
+        return {
+          Item: {
+            ...sampleEvent,
+            confirmedCount: 60,
+          },
+        };
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new EventRepository(mockDocClient);
+    await assert.rejects(
+      async () => {
+        await repo.update('evt-test-1', 'usr-org-1', { capacity: 50 });
+      },
+      (err: any) => {
+        assert.equal(err instanceof AppError, true);
+        assert.equal(err.statusCode, 400);
+        assert.equal(err.code, 'INVALID_CAPACITY');
+        assert.match(err.message, /Requested capacity is less than existing confirmed attendees/);
+        return true;
+      }
+    );
   });
 });

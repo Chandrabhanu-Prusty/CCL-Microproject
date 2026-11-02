@@ -69,7 +69,7 @@ export class EventService {
 
   /**
    * Updates an existing event.
-   * Enforces event ownership and capacity floor invariant.
+   * Enforces event ownership, capacity floor invariant, and chronological dates.
    */
   async updateEvent(
     eventId: string,
@@ -91,6 +91,14 @@ export class EventService {
         'INVALID_CAPACITY',
         'Requested capacity is less than existing confirmed attendees.'
       );
+    }
+
+    const effectiveStartAt = input.startAt ?? existing.startAt;
+    const effectiveEndAt = input.endAt ?? existing.endAt;
+    if (effectiveStartAt && effectiveEndAt) {
+      if (new Date(effectiveEndAt).getTime() <= new Date(effectiveStartAt).getTime()) {
+        throw new AppError(400, 'VALIDATION_ERROR', 'endAt must be after startAt');
+      }
     }
 
     return this.eventRepo.update(eventId, callerUserId, input);
