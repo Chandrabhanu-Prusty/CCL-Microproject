@@ -449,4 +449,74 @@ describe('Backfill Legacy Tickets Unit Tests', () => {
       assert.equal(writeCalled, false, `Expected no writes for case: ${tc.name}`);
     }
   });
+
+  test('backfillLegacyTickets skips when RSVP attendeeId is missing', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    let writeExecuted = false;
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        // Scan on RSVPs table returns otherwise valid RSVP but missing attendeeId
+        if (cmd.input?.TableName === 'MarqueRSVPs' && !cmd.input?.Key) {
+          return {
+            Items: [
+              {
+                eventId: 'evt-1',
+                // attendeeId is missing!
+                ticketId: 'tkt-legacy-1',
+                status: 'CONFIRMED',
+                createdAt: '2026-11-01T10:00:00.000Z',
+              },
+            ],
+          };
+        }
+        // Get on MarqueTickets: ticket missing
+        if (cmd.input?.TableName === 'MarqueTickets' && cmd.input?.Key) {
+          return {};
+        }
+        // Valid Event record
+        if (cmd.input?.TableName === 'MarqueEvents') {
+          return {
+            Item: {
+              eventId: 'evt-1',
+              title: 'Hackathon 2026',
+              venue: 'Campus Lab',
+              startAt: '2027-11-15T09:00:00.000Z',
+            },
+          };
+        }
+        // Valid User record
+        if (cmd.input?.TableName === 'MarqueUsers') {
+          return {
+            Item: {
+              userId: 'usr-1',
+              name: 'John Doe',
+              email: 'john@vesit.edu',
+            },
+          };
+        }
+        // Detect if any TransactWriteCommand or PutCommand is executed
+        if (
+          cmd.constructor?.name === 'TransactWriteCommand' ||
+          cmd.constructor?.name === 'PutCommand' ||
+          cmd.input?.TransactItems ||
+          cmd.input?.Item
+        ) {
+          writeExecuted = true;
+          return {};
+        }
+        return {};
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const summary = await backfillLegacyTickets({
+      execute: true, // execute mode
+      docClient: mockDocClient,
+    });
+
+    assert.equal(summary.skippedMissingMetadata, 1);
+    assert.equal(summary.backfilledTickets, 0);
+    assert.equal(writeExecuted, false);
+  });
 });
