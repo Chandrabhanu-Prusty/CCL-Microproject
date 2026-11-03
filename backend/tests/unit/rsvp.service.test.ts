@@ -314,6 +314,97 @@ describe('RsvpService Unit Tests', () => {
     );
   });
 
+  test('cancelRsvp throws 409 TICKET_RECORD_MISSING when confirmed RSVP has missing ticketId (without waitlist)', async () => {
+    const existingRsvp: RsvpItem = {
+      eventId: 'evt-ccl-1',
+      attendeeId: 'usr-att-1',
+      rsvpId: 'rsvp-1',
+      status: 'CONFIRMED',
+      // ticketId missing!
+      createdAt: '2026-11-01T10:00:00.000Z',
+      updatedAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    let cancelCalled = false;
+    const mockRsvpRepo = {
+      findByEventAndAttendee: async () => existingRsvp,
+      cancelConfirmedWithoutWaitlist: async () => {
+        cancelCalled = true;
+        return { success: true };
+      },
+    } as unknown as RsvpRepository;
+
+    const mockEventRepo = {
+      findById: async () => sampleEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.cancelRsvp('evt-ccl-1', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof ConflictError, true);
+        assert.equal(err.code, 'TICKET_RECORD_MISSING');
+        assert.equal(err.statusCode, 409);
+        return true;
+      }
+    );
+
+    assert.equal(cancelCalled, false);
+  });
+
+  test('cancelRsvp throws 409 TICKET_RECORD_MISSING when confirmed RSVP has empty string ticketId (with waitlist candidate)', async () => {
+    const existingRsvp: RsvpItem = {
+      eventId: 'evt-ccl-1',
+      attendeeId: 'usr-att-1',
+      rsvpId: 'rsvp-1',
+      status: 'CONFIRMED',
+      ticketId: '   ',
+      createdAt: '2026-11-01T10:00:00.000Z',
+      updatedAt: '2026-11-01T10:00:00.000Z',
+    };
+
+    let promoteCalled = false;
+    const sampleCandidate: WaitlistItem = {
+      eventId: 'evt-ccl-1',
+      queueKey: '2026-11-01T10:05:00.000Z#usr-waitlist-first',
+      attendeeId: 'usr-waitlist-first',
+      attendeeName: 'Waitlist User',
+      attendeeEmail: 'wl@vesit.edu',
+      status: 'WAITING',
+      createdAt: '2026-11-01T10:05:00.000Z',
+    };
+
+    const mockRsvpRepo = {
+      findByEventAndAttendee: async () => existingRsvp,
+      getOldestWaitlistEntry: async () => sampleCandidate,
+      promoteWaitlistEntry: async () => {
+        promoteCalled = true;
+        return { success: true };
+      },
+    } as unknown as RsvpRepository;
+
+    const mockEventRepo = {
+      findById: async () => sampleEvent,
+    } as unknown as EventRepository;
+
+    const service = new RsvpService(mockRsvpRepo, mockEventRepo);
+    await assert.rejects(
+      async () => {
+        await service.cancelRsvp('evt-ccl-1', attendeeCaller);
+      },
+      (err: any) => {
+        assert.equal(err instanceof ConflictError, true);
+        assert.equal(err.code, 'TICKET_RECORD_MISSING');
+        assert.equal(err.statusCode, 409);
+        return true;
+      }
+    );
+
+    assert.equal(promoteCalled, false);
+  });
+
   test('cancelRsvp fails cleanly with 404 EVENT_NOT_FOUND when event does not exist (no ticket created or partial cancellation)', async () => {
     const existingRsvp: RsvpItem = {
       eventId: 'evt-ccl-1',

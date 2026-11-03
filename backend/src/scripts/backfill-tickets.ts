@@ -1,5 +1,5 @@
 /**
- * Idempotent Backfill Utility for Legacy Marque RSVPs & Tickets
+ * Idempotent, Transaction-Safe Backfill Utility for Legacy Marque RSVPs & Tickets
  *
  * Scans MarqueRSVPs for active confirmed registrations with ticketId,
  * checks if corresponding ticket exists in MarqueTickets, and idempotently
@@ -7,6 +7,8 @@
  *
  * Safety rules:
  * - Defaults to DRY-RUN mode. Pass --execute to apply changes.
+ * - Uses atomic DynamoDB transactions with ConditionCheck on MarqueRSVPs to ensure
+ *   a concurrently cancelled RSVP can never receive a newly backfilled ACTIVE ticket.
  * - Never inserts placeholder or fabricated data.
  * - Never overwrites an existing ticket.
  * - Never modifies CHECKED_IN or CANCELLED tickets.
@@ -17,7 +19,7 @@ import {
   DynamoDBDocumentClient,
   ScanCommand,
   GetCommand,
-  PutCommand,
+  TransactWriteCommand,
   type ScanCommandInput,
 } from '@aws-sdk/lib-dynamodb';
 import { getDynamoDB } from '../config/aws.js';
@@ -34,6 +36,10 @@ export interface BackfillSummary {
   backfilledTickets: number;
   skippedMissingMetadata: number;
   dryRun: boolean;
+}
+
+function isValidString(val: unknown): val is string {
+  return typeof val === 'string' && val.trim().length > 0;
 }
 
 export async function backfillLegacyTickets(
@@ -75,13 +81,25 @@ export async function backfillLegacyTickets(
 
     for (const rsvp of items) {
       summary.inspectedRsvps++;
-      const { eventId, attendeeId, ticketId, createdAt } = rsvp;
+      const { eventId, attendeeId, ticketId, createdAt, rsvpId } = rsvp;
+      const rsvpIdentifier = rsvpId || ticketId || `${eventId}#${attendeeId}`;
 
-      if (!ticketId) {
+      // 1. Strict validation of RSVP required fields (no placeholder fallbacks)
+      const missingRsvpFields: string[] = [];
+      if (!isValidString(eventId)) missingRsvpFields.push('eventId');
+      if (!isValidString(attendeeId)) missingRsvpFields.push('attendeeId');
+      if (!isValidString(ticketId)) missingRsvpFields.push('ticketId');
+      if (!isValidString(createdAt)) missingRsvpFields.push('createdAt');
+
+      if (missingRsvpFields.length > 0) {
+        console.warn(
+          `[TICKET-BACKFILL] Skipping RSVP ${rsvpIdentifier}: missing or blank RSVP field(s) [${missingRsvpFields.join(', ')}].`
+        );
+        summary.skippedMissingMetadata++;
         continue;
       }
 
-      // Check if ticket already exists in MarqueTickets
+      // 2. Check if ticket already exists in MarqueTickets
       const ticketRes = await client.send(
         new GetCommand({
           TableName: env.TICKETS_TABLE,
@@ -96,7 +114,7 @@ export async function backfillLegacyTickets(
         continue;
       }
 
-      // Reconstruct ticket metadata ONLY from actual event and user records
+      // 3. Retrieve event and user profile records
       const eventRes = await client.send(
         new GetCommand({
           TableName: env.EVENTS_TABLE,
@@ -115,25 +133,42 @@ export async function backfillLegacyTickets(
       );
       const user = userRes.Item;
 
-      if (!event || !user || !user.email || !event.title) {
+      // 4. Strict validation of Event & User profile metadata (no fake defaults!)
+      const missingEntityFields: string[] = [];
+      if (!event) {
+        missingEntityFields.push('event entity missing');
+      } else {
+        if (!isValidString(event.title)) missingEntityFields.push('event.title');
+        if (!isValidString(event.venue)) missingEntityFields.push('event.venue');
+        if (!isValidString(event.startAt)) missingEntityFields.push('event.startAt');
+      }
+
+      if (!user) {
+        missingEntityFields.push('user profile entity missing');
+      } else {
+        if (!isValidString(user.name)) missingEntityFields.push('user.name');
+        if (!isValidString(user.email)) missingEntityFields.push('user.email');
+      }
+
+      if (!event || !user || missingEntityFields.length > 0) {
         console.warn(
-          `[TICKET-BACKFILL] Skipping RSVP ${rsvp.rsvpId}: missing event (${eventId}) or user profile (${attendeeId}).`
+          `[TICKET-BACKFILL] Skipping RSVP ${rsvpIdentifier}: missing or blank metadata [${missingEntityFields.join(', ')}].`
         );
         summary.skippedMissingMetadata++;
         continue;
       }
 
       const reconstructedTicket = {
-        ticketId,
-        eventId,
-        attendeeId,
-        attendeeName: user.name || user.email.split('@')[0],
-        attendeeEmail: user.email,
-        eventTitle: event.title,
-        eventVenue: event.venue,
-        eventStartAt: event.startAt,
+        ticketId: ticketId.trim(),
+        eventId: eventId.trim(),
+        attendeeId: attendeeId.trim(),
+        attendeeName: user.name.trim(),
+        attendeeEmail: user.email.trim(),
+        eventTitle: event.title.trim(),
+        eventVenue: event.venue.trim(),
+        eventStartAt: event.startAt.trim(),
         status: 'ACTIVE',
-        issuedAt: createdAt || new Date().toISOString(),
+        issuedAt: createdAt.trim(),
       };
 
       if (!isExecute) {
@@ -142,17 +177,65 @@ export async function backfillLegacyTickets(
         );
         summary.backfilledTickets++;
       } else {
-        await client.send(
-          new PutCommand({
-            TableName: env.TICKETS_TABLE,
-            Item: reconstructedTicket,
-            ConditionExpression: 'attribute_not_exists(ticketId)',
-          })
-        );
-        console.log(
-          `[EXECUTED] Created ticket ${ticketId} for attendee ${attendeeId} on event "${event.title}".`
-        );
-        summary.backfilledTickets++;
+        // Atomic transaction: verify RSVP is STILL CONFIRMED with matching ticketId before putting ticket
+        try {
+          await client.send(
+            new TransactWriteCommand({
+              TransactItems: [
+                {
+                  ConditionCheck: {
+                    TableName: env.RSVPS_TABLE,
+                    Key: { eventId, attendeeId },
+                    ConditionExpression: '#status = :confirmed AND ticketId = :ticketId',
+                    ExpressionAttributeNames: {
+                      '#status': 'status',
+                    },
+                    ExpressionAttributeValues: {
+                      ':confirmed': 'CONFIRMED',
+                      ':ticketId': ticketId,
+                    },
+                  },
+                },
+                {
+                  Put: {
+                    TableName: env.TICKETS_TABLE,
+                    Item: reconstructedTicket,
+                    ConditionExpression: 'attribute_not_exists(ticketId)',
+                  },
+                },
+              ],
+            })
+          );
+          console.log(
+            `[EXECUTED] Created ticket ${ticketId} for attendee ${attendeeId} on event "${event.title}".`
+          );
+          summary.backfilledTickets++;
+        } catch (err: unknown) {
+          if (
+            typeof err === 'object' &&
+            err !== null &&
+            'name' in err &&
+            err.name === 'TransactionCanceledException'
+          ) {
+            const reasons = (err as any).CancellationReasons || [];
+            // Index 1: ticket was created concurrently
+            if (reasons[1]?.Code === 'ConditionalCheckFailed') {
+              summary.existingTickets++;
+              console.log(
+                `[CONCURRENCY] Ticket ${ticketId} was created concurrently. Skipping.`
+              );
+              continue;
+            }
+            // Index 0: RSVP is no longer CONFIRMED or ticketId changed
+            if (reasons[0]?.Code === 'ConditionalCheckFailed') {
+              console.warn(
+                `[CONCURRENCY] RSVP for attendee ${attendeeId} on event ${eventId} is no longer CONFIRMED with ticket ${ticketId}. Skipping.`
+              );
+              continue;
+            }
+          }
+          throw err;
+        }
       }
     }
 
@@ -167,7 +250,10 @@ export async function backfillLegacyTickets(
 }
 
 // Direct invocation check
-if (process.argv[1]?.endsWith('backfill-tickets.ts') || process.argv[1]?.endsWith('backfill-tickets.js')) {
+if (
+  process.argv[1]?.endsWith('backfill-tickets.ts') ||
+  process.argv[1]?.endsWith('backfill-tickets.js')
+) {
   const execute = process.argv.includes('--execute');
   backfillLegacyTickets({ execute })
     .then(() => process.exit(0))

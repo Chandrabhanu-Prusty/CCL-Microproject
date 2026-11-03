@@ -192,7 +192,35 @@ describe('RsvpRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     assert.equal(res.reason, 'REGISTRATION_CLOSED');
   });
 
-  test('getWaitlistPosition accurately calculates 1-based FIFO position without counting later attendees', async () => {
+  test('getWaitlistPosition returns 1 for first attendee in queue', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockDocClient = {
+      send: async () => ({ Count: 1 }),
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new RsvpRepository(mockDocClient);
+    const pos = await repo.getWaitlistPosition('evt-test-1', '2026-11-01T12:00:00.000Z#usr-1');
+
+    assert.equal(pos, 1);
+  });
+
+  test('getWaitlistPosition returns 4 for fourth attendee in queue', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const mockDocClient = {
+      send: async () => ({ Count: 4 }),
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new RsvpRepository(mockDocClient);
+    const pos = await repo.getWaitlistPosition('evt-test-1', '2026-11-01T12:05:00.000Z#usr-4');
+
+    assert.equal(pos, 4);
+  });
+
+  test('getWaitlistPosition queries with queueKey <= :queueKey so later entries do not affect earlier position', async () => {
     resetEnvCache();
     getEnv(testEnv);
 
@@ -200,25 +228,29 @@ describe('RsvpRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     const mockDocClient = {
       send: async (cmd: any) => {
         executedCommand = cmd;
-        return { Count: 4 }; // 3 earlier + 1 self = position 4
+        return { Count: 2 };
       },
     } as unknown as DynamoDBDocumentClient;
 
     const repo = new RsvpRepository(mockDocClient);
-    const pos = await repo.getWaitlistPosition('evt-test-1', '2026-11-01T12:05:00.000Z#usr-4');
+    const targetQueueKey = '2026-11-01T12:02:00.000Z#usr-2';
+    const pos = await repo.getWaitlistPosition('evt-test-1', targetQueueKey);
 
-    assert.equal(pos, 4);
+    assert.equal(pos, 2);
     assert.equal(executedCommand.input.TableName, 'MarqueWaitlist');
     assert.equal(
       executedCommand.input.KeyConditionExpression,
       'eventId = :eventId AND queueKey <= :queueKey'
     );
-    assert.equal(executedCommand.input.ExpressionAttributeValues[':queueKey'], '2026-11-01T12:05:00.000Z#usr-4');
+    assert.equal(
+      executedCommand.input.ExpressionAttributeValues[':queueKey'],
+      targetQueueKey
+    );
     assert.equal(executedCommand.input.Select, 'COUNT');
     assert.equal(executedCommand.input.ConsistentRead, true);
   });
 
-  test('getWaitlistPosition returns 1 for first attendee and handles pagination', async () => {
+  test('getWaitlistPosition correctly sums counts across paginated DynamoDB responses', async () => {
     resetEnvCache();
     getEnv(testEnv);
 
@@ -249,7 +281,7 @@ describe('RsvpRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     });
   });
 
-  test('getWaitlistPosition throws explicit error on impossible zero count result', async () => {
+  test('getWaitlistPosition throws explicit WAITLIST_POSITION_ERROR on impossible zero count result', async () => {
     resetEnvCache();
     getEnv(testEnv);
 
@@ -265,6 +297,51 @@ describe('RsvpRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
       (err: any) => {
         assert.equal(err.code, 'WAITLIST_POSITION_ERROR');
         assert.equal(err.statusCode, 500);
+        return true;
+      }
+    );
+  });
+
+  test('promoteWaitlistEntry rejects missing or blank oldTicketId with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const repo = new RsvpRepository({} as any);
+    await assert.rejects(
+      async () => {
+        await repo.promoteWaitlistEntry(
+          'evt-test-1',
+          'usr-cancelling',
+          '   ',
+          sampleWaitlistEntry,
+          'tkt-promoted-1',
+          {
+            eventTitle: 'Hackathon',
+            eventVenue: 'Lab 502',
+            eventStartAt: '2027-11-15T09:00:00.000Z',
+          }
+        );
+      },
+      (err: any) => {
+        assert.equal(err.code, 'VALIDATION_ERROR');
+        assert.equal(err.statusCode, 400);
+        return true;
+      }
+    );
+  });
+
+  test('cancelConfirmedWithoutWaitlist rejects missing or blank oldTicketId with 400 VALIDATION_ERROR', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const repo = new RsvpRepository({} as any);
+    await assert.rejects(
+      async () => {
+        await repo.cancelConfirmedWithoutWaitlist('evt-test-1', 'usr-cancelling', '');
+      },
+      (err: any) => {
+        assert.equal(err.code, 'VALIDATION_ERROR');
+        assert.equal(err.statusCode, 400);
         return true;
       }
     );
@@ -512,5 +589,49 @@ describe('RsvpRepository Unit Tests (Mocked In-Memory DocumentClient)', () => {
     const eventUpdate = executedCommand.input.TransactItems[2].Update;
     assert.equal(eventUpdate.TableName, 'MarqueEvents');
     assert.match(eventUpdate.ConditionExpression, /waitlistCount > :zero/);
+  });
+
+  test('findRsvpsByAttendee queries attendee-index GSI and paginates across multiple pages using LastEvaluatedKey', async () => {
+    resetEnvCache();
+    getEnv(testEnv);
+
+    const executedCommands: any[] = [];
+    const mockDocClient = {
+      send: async (cmd: any) => {
+        executedCommands.push(cmd);
+        if (executedCommands.length === 1) {
+          return {
+            Items: [
+              { eventId: 'evt-1', attendeeId: 'usr-1', status: 'CONFIRMED' },
+              { eventId: 'evt-2', attendeeId: 'usr-1', status: 'WAITLISTED' },
+            ],
+            LastEvaluatedKey: { eventId: 'evt-2', attendeeId: 'usr-1' },
+          };
+        }
+        return {
+          Items: [{ eventId: 'evt-3', attendeeId: 'usr-1', status: 'CANCELLED' }],
+        };
+      },
+    } as unknown as DynamoDBDocumentClient;
+
+    const repo = new RsvpRepository(mockDocClient);
+    const results = await repo.findRsvpsByAttendee('usr-1');
+
+    assert.equal(results.length, 3);
+    assert.equal(executedCommands.length, 2);
+
+    // Verify first query on attendee-index GSI
+    assert.equal(executedCommands[0].input.TableName, 'MarqueRSVPs');
+    assert.equal(executedCommands[0].input.IndexName, 'attendee-index');
+    assert.equal(executedCommands[0].input.KeyConditionExpression, 'attendeeId = :aid');
+    assert.equal(executedCommands[0].input.ExpressionAttributeValues[':aid'], 'usr-1');
+    assert.equal(executedCommands[0].input.ScanIndexForward, false);
+    assert.equal(executedCommands[0].input.ExclusiveStartKey, undefined);
+
+    // Verify second query passed LastEvaluatedKey as ExclusiveStartKey
+    assert.deepEqual(executedCommands[1].input.ExclusiveStartKey, {
+      eventId: 'evt-2',
+      attendeeId: 'usr-1',
+    });
   });
 });

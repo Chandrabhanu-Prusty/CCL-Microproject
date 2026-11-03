@@ -157,7 +157,8 @@ export class RsvpService {
   /**
    * Cancels caller's active registration.
    * If CONFIRMED:
-   * - Retrieves event metadata; throws 404 if event lookup fails (never fabricates defaults or executes partial promotion).
+   * - Enforces non-empty ticketId before cancellation or promotion; returns 409 TICKET_RECORD_MISSING if missing.
+   * - Retrieves event metadata; throws 404 EVENT_NOT_FOUND if event lookup fails.
    * - If event has started: does NOT promote waitlisted attendees; decrements confirmedCount and cancels ticket.
    * - If event has not started and waitlist exists: atomically promotes oldest candidate and cancels old ticket.
    * - If event has not started and waitlist empty: decrements confirmedCount and cancels old ticket.
@@ -202,6 +203,15 @@ export class RsvpService {
       }
 
       // Branch B: Confirmed attendee cancellation
+      // A CONFIRMED RSVP must have a non-empty ticketId before cancellation or promotion
+      if (!existingRsvp.ticketId || existingRsvp.ticketId.trim().length === 0) {
+        throw new ConflictError(
+          'TICKET_RECORD_MISSING',
+          'Confirmed registration is missing ticket identifier.'
+        );
+      }
+      const ticketId = existingRsvp.ticketId.trim();
+
       // Retrieve event details strictly; do not swallow errors or use fake defaults
       const event = await this.eventRepo.findById(eventId);
       if (!event) {
@@ -215,7 +225,7 @@ export class RsvpService {
         const cancelRes = await this.rsvpRepo.cancelConfirmedWithoutWaitlist(
           eventId,
           caller.userId,
-          existingRsvp.ticketId
+          ticketId
         );
 
         if (cancelRes.success) {
@@ -257,7 +267,7 @@ export class RsvpService {
         const promoRes = await this.rsvpRepo.promoteWaitlistEntry(
           eventId,
           caller.userId,
-          existingRsvp.ticketId,
+          ticketId,
           oldestCandidate,
           newTicketId,
           {
@@ -312,7 +322,7 @@ export class RsvpService {
         const cancelRes = await this.rsvpRepo.cancelConfirmedWithoutWaitlist(
           eventId,
           caller.userId,
-          existingRsvp.ticketId
+          ticketId
         );
 
         if (cancelRes.success) {

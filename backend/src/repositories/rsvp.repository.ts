@@ -437,16 +437,16 @@ export class RsvpRepository {
   /**
    * Executes atomic promotion transaction:
    * 1. Updates cancelled attendee's RSVP to CANCELLED and removes ticketId AND queueKey.
-   * 2. If old ticket exists, atomically updates ACTIVE ticket to CANCELLED in MarqueTickets (checking #status = :active).
+   * 2. Atomically updates cancelling attendee's ACTIVE ticket to CANCELLED in MarqueTickets (enforcing #status = :active).
    * 3. Updates oldest waitlist candidate's RSVP to CONFIRMED with new ticketId.
-   * 4. Creates candidate's new ticket with status ACTIVE in MarqueTickets.
+   * 4. Creates candidate's new ticket with status ACTIVE in MarqueTickets using real event metadata.
    * 5. Deletes waitlist candidate's queue entry from MarqueWaitlist.
    * 6. Decrements waitlistCount on MarqueEvents with condition that #startAt > :now.
    */
   async promoteWaitlistEntry(
     eventId: string,
     cancelledAttendeeId: string,
-    oldTicketId: string | undefined,
+    oldTicketId: string,
     candidate: WaitlistItem,
     newTicketId: string,
     eventMetadata: EventTicketMetadata
@@ -456,6 +456,10 @@ export class RsvpRepository {
       candidate.attendeeName && candidate.attendeeName.trim().length > 0
         ? candidate.attendeeName.trim()
         : 'Waitlisted Attendee';
+
+    if (!oldTicketId || oldTicketId.trim().length === 0) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'oldTicketId is mandatory for confirmed promotion.');
+    }
 
     const transactItems: any[] = [
       // 0. Update cancelled attendee's RSVP to CANCELLED and remove both ticketId and queueKey
@@ -475,12 +479,8 @@ export class RsvpRepository {
           },
         },
       },
-    ];
-
-    let oldTicketIndex = -1;
-    if (oldTicketId) {
-      oldTicketIndex = transactItems.length;
-      transactItems.push({
+      // 1. Mandatory old ticket update: cancelled only if currently ACTIVE
+      {
         Update: {
           TableName: this.ticketsTable,
           Key: { ticketId: oldTicketId },
@@ -495,75 +495,70 @@ export class RsvpRepository {
             ':now': now,
           },
         },
-      });
-    }
-
-    // Candidate RSVP update
-    transactItems.push({
-      Update: {
-        TableName: this.rsvpsTable,
-        Key: { eventId, attendeeId: candidate.attendeeId },
-        UpdateExpression: 'SET #status = :confirmed, ticketId = :ticketId, updatedAt = :now REMOVE queueKey',
-        ConditionExpression: 'attribute_exists(eventId) AND #status = :waitlisted',
-        ExpressionAttributeNames: {
-          '#status': 'status',
-        },
-        ExpressionAttributeValues: {
-          ':confirmed': 'CONFIRMED',
-          ':waitlisted': 'WAITLISTED',
-          ':ticketId': newTicketId,
-          ':now': now,
+      },
+      // 2. Candidate RSVP update
+      {
+        Update: {
+          TableName: this.rsvpsTable,
+          Key: { eventId, attendeeId: candidate.attendeeId },
+          UpdateExpression: 'SET #status = :confirmed, ticketId = :ticketId, updatedAt = :now REMOVE queueKey',
+          ConditionExpression: 'attribute_exists(eventId) AND #status = :waitlisted',
+          ExpressionAttributeNames: {
+            '#status': 'status',
+          },
+          ExpressionAttributeValues: {
+            ':confirmed': 'CONFIRMED',
+            ':waitlisted': 'WAITLISTED',
+            ':ticketId': newTicketId,
+            ':now': now,
+          },
         },
       },
-    });
-
-    // Create candidate's new ticket in MarqueTickets using real event metadata
-    transactItems.push({
-      Put: {
-        TableName: this.ticketsTable,
-        Item: {
-          ticketId: newTicketId,
-          eventId,
-          attendeeId: candidate.attendeeId,
-          attendeeName: candidateName,
-          attendeeEmail: candidate.attendeeEmail,
-          eventTitle: eventMetadata.eventTitle,
-          eventVenue: eventMetadata.eventVenue,
-          eventStartAt: eventMetadata.eventStartAt,
-          status: 'ACTIVE',
-          issuedAt: now,
-        },
-        ConditionExpression: 'attribute_not_exists(ticketId)',
-      },
-    });
-
-    // Delete candidate from MarqueWaitlist
-    transactItems.push({
-      Delete: {
-        TableName: this.waitlistTable,
-        Key: { eventId, queueKey: candidate.queueKey },
-        ConditionExpression: 'attribute_exists(eventId) AND attribute_exists(queueKey)',
-      },
-    });
-
-    // Decrement waitlistCount on MarqueEvents, enforcing that event has not started
-    const eventUpdateIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: this.eventsTable,
-        Key: { eventId },
-        UpdateExpression: 'SET waitlistCount = waitlistCount - :dec, updatedAt = :now',
-        ConditionExpression: 'waitlistCount > :zero AND #startAt > :now',
-        ExpressionAttributeNames: {
-          '#startAt': 'startAt',
-        },
-        ExpressionAttributeValues: {
-          ':dec': 1,
-          ':zero': 0,
-          ':now': now,
+      // 3. Create candidate's new ticket in MarqueTickets using real event metadata
+      {
+        Put: {
+          TableName: this.ticketsTable,
+          Item: {
+            ticketId: newTicketId,
+            eventId,
+            attendeeId: candidate.attendeeId,
+            attendeeName: candidateName,
+            attendeeEmail: candidate.attendeeEmail,
+            eventTitle: eventMetadata.eventTitle,
+            eventVenue: eventMetadata.eventVenue,
+            eventStartAt: eventMetadata.eventStartAt,
+            status: 'ACTIVE',
+            issuedAt: now,
+          },
+          ConditionExpression: 'attribute_not_exists(ticketId)',
         },
       },
-    });
+      // 4. Delete candidate from MarqueWaitlist
+      {
+        Delete: {
+          TableName: this.waitlistTable,
+          Key: { eventId, queueKey: candidate.queueKey },
+          ConditionExpression: 'attribute_exists(eventId) AND attribute_exists(queueKey)',
+        },
+      },
+      // 5. Decrement waitlistCount on MarqueEvents, enforcing that event has not started
+      {
+        Update: {
+          TableName: this.eventsTable,
+          Key: { eventId },
+          UpdateExpression: 'SET waitlistCount = waitlistCount - :dec, updatedAt = :now',
+          ConditionExpression: 'waitlistCount > :zero AND #startAt > :now',
+          ExpressionAttributeNames: {
+            '#startAt': 'startAt',
+          },
+          ExpressionAttributeValues: {
+            ':dec': 1,
+            ':zero': 0,
+            ':now': now,
+          },
+        },
+      },
+    ];
 
     try {
       await this.getClient().send(
@@ -584,8 +579,8 @@ export class RsvpRepository {
         if (reasons[0]?.Code === 'ConditionalCheckFailed') {
           return { success: false, reason: 'RSVP_NOT_FOUND' };
         }
-        // Old ticket condition failed: check ticket record
-        if (oldTicketIndex !== -1 && reasons[oldTicketIndex]?.Code === 'ConditionalCheckFailed') {
+        // Index 1: Old ticket condition failed: inspect ticket
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
           try {
             const ticketCheck = await this.getClient().send(
               new GetCommand({
@@ -605,8 +600,8 @@ export class RsvpRepository {
           }
           return { success: false, reason: 'TICKET_NOT_FOUND' };
         }
-        // Event condition failed: check if event has started
-        if (reasons[eventUpdateIndex]?.Code === 'ConditionalCheckFailed') {
+        // Index 5: Event condition failed: check if event has started
+        if (reasons[5]?.Code === 'ConditionalCheckFailed') {
           try {
             const eventCheck = await this.getClient().send(
               new GetCommand({
@@ -631,17 +626,22 @@ export class RsvpRepository {
   /**
    * Executes atomic cancellation when waitlist is empty or event has started:
    * 1. Updates cancelled attendee's RSVP to CANCELLED and removes ticketId AND queueKey.
-   * 2. If old ticket exists, atomically updates ACTIVE ticket to CANCELLED in MarqueTickets (checking #status = :active).
+   * 2. Atomically updates cancelling attendee's ACTIVE ticket to CANCELLED in MarqueTickets (enforcing #status = :active).
    * 3. Decrements confirmedCount on MarqueEvents with condition that either waitlistCount is 0/absent OR event has started.
    */
   async cancelConfirmedWithoutWaitlist(
     eventId: string,
     cancelledAttendeeId: string,
-    oldTicketId?: string
+    oldTicketId: string
   ): Promise<CancelConfirmedNoWaitlistResult> {
     const now = new Date().toISOString();
 
+    if (!oldTicketId || oldTicketId.trim().length === 0) {
+      throw new AppError(400, 'VALIDATION_ERROR', 'oldTicketId is mandatory for confirmed cancellation.');
+    }
+
     const transactItems: any[] = [
+      // 0. Update RSVP to CANCELLED and remove both ticketId and queueKey
       {
         Update: {
           TableName: this.rsvpsTable,
@@ -658,12 +658,8 @@ export class RsvpRepository {
           },
         },
       },
-    ];
-
-    let oldTicketIndex = -1;
-    if (oldTicketId) {
-      oldTicketIndex = transactItems.length;
-      transactItems.push({
+      // 1. Mandatory old ticket update: cancelled only if currently ACTIVE
+      {
         Update: {
           TableName: this.ticketsTable,
           Key: { ticketId: oldTicketId },
@@ -678,27 +674,26 @@ export class RsvpRepository {
             ':now': now,
           },
         },
-      });
-    }
-
-    const eventIndex = transactItems.length;
-    transactItems.push({
-      Update: {
-        TableName: this.eventsTable,
-        Key: { eventId },
-        UpdateExpression: 'SET confirmedCount = confirmedCount - :dec, updatedAt = :now',
-        ConditionExpression:
-          'confirmedCount > :zero AND ((attribute_not_exists(waitlistCount) OR waitlistCount = :zero) OR #startAt <= :now)',
-        ExpressionAttributeNames: {
-          '#startAt': 'startAt',
-        },
-        ExpressionAttributeValues: {
-          ':dec': 1,
-          ':zero': 0,
-          ':now': now,
+      },
+      // 2. Decrement confirmedCount on MarqueEvents
+      {
+        Update: {
+          TableName: this.eventsTable,
+          Key: { eventId },
+          UpdateExpression: 'SET confirmedCount = confirmedCount - :dec, updatedAt = :now',
+          ConditionExpression:
+            'confirmedCount > :zero AND ((attribute_not_exists(waitlistCount) OR waitlistCount = :zero) OR #startAt <= :now)',
+          ExpressionAttributeNames: {
+            '#startAt': 'startAt',
+          },
+          ExpressionAttributeValues: {
+            ':dec': 1,
+            ':zero': 0,
+            ':now': now,
+          },
         },
       },
-    });
+    ];
 
     try {
       await this.getClient().send(
@@ -719,8 +714,8 @@ export class RsvpRepository {
         if (reasons[0]?.Code === 'ConditionalCheckFailed') {
           return { success: false, reason: 'RSVP_NOT_FOUND' };
         }
-        // Ticket update failed
-        if (oldTicketIndex !== -1 && reasons[oldTicketIndex]?.Code === 'ConditionalCheckFailed') {
+        // Index 1: Ticket update failed: check ticket
+        if (reasons[1]?.Code === 'ConditionalCheckFailed') {
           try {
             const ticketCheck = await this.getClient().send(
               new GetCommand({
@@ -740,8 +735,8 @@ export class RsvpRepository {
           }
           return { success: false, reason: 'TICKET_NOT_FOUND' };
         }
-        // Event update: waitlistCount was not zero and event has not started
-        if (reasons[eventIndex]?.Code === 'ConditionalCheckFailed') {
+        // Index 2: Event update failed (waitlist was not empty and event not started)
+        if (reasons[2]?.Code === 'ConditionalCheckFailed') {
           return { success: false, reason: 'WAITLIST_NOT_EMPTY' };
         }
       }
