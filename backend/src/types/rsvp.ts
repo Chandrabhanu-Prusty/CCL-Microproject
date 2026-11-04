@@ -39,6 +39,21 @@ export interface TicketItem {
   updatedAt?: string;
 }
 
+export interface ReserveTicketInput {
+  ticketId: string;
+  attendeeName: string;
+  attendeeEmail: string;
+  eventTitle: string;
+  eventVenue: string;
+  eventStartAt: string;
+}
+
+export interface EventTicketMetadata {
+  eventTitle: string;
+  eventVenue: string;
+  eventStartAt: string;
+}
+
 export interface ConfirmedRsvpResult {
   status: 'CONFIRMED';
   rsvpId: string;
